@@ -9,8 +9,7 @@
       { type: 'A', name: 'mta-sts', label: 'mta-sts (A)' },
       { type: 'AAAA', name: 'mta-sts', label: 'mta-sts (AAAA)' },
       { type: 'TXT', name: '_mta-sts', label: '_mta-sts (TXT)' },
-      { type: 'TXT', name: '_smtp._tls', label: '_smtp._tls (TXT)' },
-      { type: 'TXT', name: 'google._domainkey', label: 'google._domainkey (TXT)' }
+      { type: 'TXT', name: '_smtp._tls', label: '_smtp._tls (TXT)' }
     ]
   };
 
@@ -22,10 +21,12 @@
 
   let domain = '';
   let provider = 'google';
+  let dkimSelectors = 'google, default, selector1, selector2';
   let loading = false;
   let error = '';
   let results = null;
   let showToast = false;
+  let toastTimer = null;
 
   // Parse CAA record from Cloudflare's hex format
   function parseCAA(hexData) {
@@ -142,6 +143,24 @@
         }
       }
 
+      // Query DKIM selectors
+      if (dkimSelectors.trim()) {
+        const selectors = dkimSelectors.split(',').map(s => s.trim()).filter(s => s);
+        for (const selector of selectors) {
+          const queryDomain = `${selector}._domainkey.${cleanDomain}`;
+          const label = `${selector}._domainkey (TXT)`;
+          
+          try {
+            const result = await queryDNS(queryDomain, 'TXT', providerUrl);
+            if (result.Answer && result.Answer.length > 0) {
+              emailSecurityResults[label] = result.Answer;
+            }
+          } catch (err) {
+            console.error(`Error querying ${label}:`, err);
+          }
+        }
+      }
+
       results = {
         domain: cleanDomain,
         provider: provider === 'google' ? 'dns.google' : '1.1.1.1',
@@ -150,8 +169,8 @@
       };
 
       // Update browser history
-      const state = { domain: cleanDomain, provider };
-      const url = `?domain=${encodeURIComponent(cleanDomain)}&provider=${provider}`;
+      const state = { domain: cleanDomain, provider, dkimSelectors };
+      const url = `?domain=${encodeURIComponent(cleanDomain)}&provider=${provider}&dkim=${encodeURIComponent(dkimSelectors)}`;
       window.history.pushState(state, '', url);
 
     } catch (err) {
@@ -166,12 +185,14 @@
     if (event.state && event.state.domain) {
       domain = event.state.domain;
       provider = event.state.provider || 'google';
+      dkimSelectors = event.state.dkimSelectors || 'google, default, selector1, selector2';
       handleLookup();
     } else {
       // Clear results when going back to initial state
       results = null;
       domain = '';
       provider = 'google';
+      dkimSelectors = 'google, default, selector1, selector2';
     }
   }
 
@@ -182,6 +203,7 @@
     const params = new URLSearchParams(window.location.search);
     const urlDomain = params.get('domain');
     const urlProvider = params.get('provider');
+    const urlDkim = params.get('dkim');
 
     if (urlDomain) {
       domain = urlDomain;
@@ -189,6 +211,9 @@
         provider = urlProvider;
       } else {
         provider = 'google';
+      }
+      if (urlDkim) {
+        dkimSelectors = urlDkim;
       }
       handleLookup();
     }
@@ -236,9 +261,17 @@
   async function copyToClipboard(text) {
     try {
       await navigator.clipboard.writeText(text);
+      
+      // Clear any existing timer
+      if (toastTimer) {
+        clearTimeout(toastTimer);
+      }
+      
+      // Show toast and set new timer
       showToast = true;
-      setTimeout(() => {
+      toastTimer = setTimeout(() => {
         showToast = false;
+        toastTimer = null;
       }, 2000);
     } catch (err) {
       console.error('Failed to copy:', err);
@@ -273,6 +306,16 @@
         Clear
       </button>
     </div>
+    <div class="dkim-group">
+      <label for="dkim-selectors">DKIM Selectors:</label>
+      <input
+        id="dkim-selectors"
+        type="text"
+        bind:value={dkimSelectors}
+        placeholder="e.g., google, default, selector1, selector2"
+        disabled={loading}
+      />
+    </div>
   </div>
 
   {#if loading}
@@ -304,13 +347,13 @@
                 <div class="record-list">
                   {#each records as record}
                     <div class="record-item">
-                      <div class="record-content">
-                        <span class="record-ttl">TTL: {record.TTL}s</span>
+                      <span class="record-ttl">TTL: {record.TTL}s</span>
+                      <div class="record-data-wrapper">
                         <span class="record-data">{record.data}</span>
+                        <button class="copy-btn" on:click={() => copyToClipboard(record.data)} title="Copy to clipboard">
+                          📋
+                        </button>
                       </div>
-                      <button class="copy-btn" on:click={() => copyToClipboard(record.data)} title="Copy to clipboard">
-                        📋
-                      </button>
                     </div>
                   {/each}
                 </div>
@@ -331,13 +374,13 @@
                 <div class="record-list">
                   {#each records as record}
                     <div class="record-item">
-                      <div class="record-content">
-                        <span class="record-ttl">TTL: {record.TTL}s</span>
+                      <span class="record-ttl">TTL: {record.TTL}s</span>
+                      <div class="record-data-wrapper">
                         <span class="record-data">{record.data}</span>
+                        <button class="copy-btn" on:click={() => copyToClipboard(record.data)} title="Copy to clipboard">
+                          📋
+                        </button>
                       </div>
-                      <button class="copy-btn" on:click={() => copyToClipboard(record.data)} title="Copy to clipboard">
-                        📋
-                      </button>
                     </div>
                   {/each}
                 </div>
@@ -382,7 +425,7 @@
 <!-- Toast Notification -->
 {#if showToast}
   <div class="toast">
-    ✓ Copied to clipboard
+    ✓ Copied
   </div>
 {/if}
 
@@ -434,9 +477,29 @@
     flex-wrap: wrap;
   }
 
+  .dkim-group {
+    margin-top: 1rem;
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+  }
+
+  .dkim-group label {
+    font-size: 0.95rem;
+    color: #e0e0e0;
+    white-space: nowrap;
+    font-weight: 500;
+  }
+
+  .dkim-group input {
+    flex: 1;
+    height: 40px;
+    font-size: 0.9rem;
+  }
+
   select {
     min-width: 160px;
-    padding: 0.75rem 1rem;
+    padding: 0.75rem 2.5rem 0.75rem 1rem;
     border: 2px solid #3a3a3a;
     border-radius: 8px;
     font-size: 1rem;
@@ -445,6 +508,11 @@
     cursor: pointer;
     transition: border-color 0.3s;
     height: 48px;
+    appearance: none;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%23e0e0e0' d='M6 9L1 4h10z'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 1rem center;
+    background-size: 12px;
   }
 
   select:focus {
@@ -454,6 +522,10 @@
 
   select:disabled {
     background: #333;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%23999' d='M6 9L1 4h10z'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 1rem center;
+    background-size: 12px;
     cursor: not-allowed;
   }
 
@@ -708,14 +780,6 @@
     border-radius: 8px;
     border-left: 4px solid #667eea;
     display: flex;
-    justify-content: space-between;
-    align-items: center;
-    gap: 1rem;
-  }
-
-  .record-content {
-    flex: 1;
-    display: flex;
     flex-direction: column;
     gap: 0.5rem;
   }
@@ -726,28 +790,43 @@
     font-weight: 500;
   }
 
+  .record-data-wrapper {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    background: #0f0f0f;
+    border-radius: 4px;
+    padding: 0.5rem;
+  }
+
   .record-data {
+    flex: 1;
     font-family: 'Courier New', monospace;
     color: #b0b0b0;
     font-size: 1rem;
     font-weight: bold;
     word-break: break-all;
     line-height: 1.6;
-    padding: 0.5rem;
-    background: #0f0f0f;
-    border-radius: 4px;
   }
 
   .copy-btn {
     flex-shrink: 0;
-    padding: 0.25rem 0.5rem;
+    padding: 0.3rem;
     background: transparent;
     border: none;
     font-size: 1rem;
-    color: #888;
+    color: #999;
     cursor: pointer;
     transition: all 0.2s;
     opacity: 0.5;
+    border-radius: 4px;
+    width: auto;
+    min-width: auto;
+  }
+
+  .copy-btn:hover {
+    opacity: 1;
+    background: rgba(102, 126, 234, 0.1);
   }
 
   .copy-btn:active {
@@ -824,6 +903,16 @@
       flex-direction: column;
     }
 
+    .dkim-group {
+      flex-direction: column;
+      align-items: stretch;
+      gap: 0.5rem;
+    }
+
+    .dkim-group label {
+      font-size: 0.9rem;
+    }
+
     input, select, button {
       width: 100%;
       height: 48px;
@@ -860,12 +949,11 @@
 
     .record-item {
       padding: 1rem;
-      flex-direction: column;
-      align-items: flex-start;
     }
 
     .copy-btn {
-      align-self: flex-end;
+      padding: 0.25rem;
+      font-size: 0.9rem;
     }
 
     .record-data {
