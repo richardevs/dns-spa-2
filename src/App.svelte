@@ -257,6 +257,22 @@
     };
   }
 
+  // Parse SOA record into components
+  function parseSOA(soaData) {
+    const parts = soaData.trim().split(/\s+/);
+    if (parts.length < 7) return null;
+    
+    return {
+      mname: parts[0],        // Primary nameserver
+      rname: parts[1],        // Responsible party email
+      serial: parts[2],       // Serial number
+      refresh: parts[3],      // Refresh interval
+      retry: parts[4],        // Retry interval
+      expire: parts[5],       // Expire time
+      minimum: parts[6]       // Minimum TTL
+    };
+  }
+
   // Copy record data to clipboard
   async function copyToClipboard(text) {
     try {
@@ -354,6 +370,45 @@
                           📋
                         </button>
                       </div>
+                      
+                      {#if type === 'SOA'}
+                        {@const soa = parseSOA(record.data)}
+                        {#if soa}
+                          <div class="soa-explained">
+                            <div class="soa-explained-header">SOA Fields Explained:</div>
+                            <div class="soa-grid">
+                              <div class="soa-field">
+                                <span class="soa-label">Primary Nameserver:</span>
+                                <span class="soa-value">{soa.mname}</span>
+                              </div>
+                              <div class="soa-field">
+                                <span class="soa-label">Responsible Party:</span>
+                                <span class="soa-value">{soa.rname}</span>
+                              </div>
+                              <div class="soa-field">
+                                <span class="soa-label">Serial:</span>
+                                <span class="soa-value">{soa.serial}</span>
+                              </div>
+                              <div class="soa-field">
+                                <span class="soa-label">Refresh:</span>
+                                <span class="soa-value">{soa.refresh}s</span>
+                              </div>
+                              <div class="soa-field">
+                                <span class="soa-label">Retry:</span>
+                                <span class="soa-value">{soa.retry}s</span>
+                              </div>
+                              <div class="soa-field">
+                                <span class="soa-label">Expire:</span>
+                                <span class="soa-value">{soa.expire}s</span>
+                              </div>
+                              <div class="soa-field">
+                                <span class="soa-label">Minimum TTL:</span>
+                                <span class="soa-value">{soa.minimum}s</span>
+                              </div>
+                            </div>
+                          </div>
+                        {/if}
+                      {/if}
                     </div>
                   {/each}
                 </div>
@@ -371,6 +426,11 @@
             {#each Object.entries(results.emailSecurity) as [label, records]}
               <div class="record-group" id="record-{label}">
                 <h4>{label}</h4>
+                {#if label === 'SPF (TXT)' && records.length > 1}
+                  <div class="spf-warning">
+                    ⚠️ Warning: Multiple SPF records detected! A domain must have only ONE SPF record. Having multiple SPF records is invalid and will cause SPF checks to fail.
+                  </div>
+                {/if}
                 <div class="record-list">
                   {#each records as record}
                     <div class="record-item">
@@ -834,6 +894,62 @@
     transform: scale(0.9);
   }
 
+  .soa-explained {
+    margin-top: 0.75rem;
+    padding-top: 0.75rem;
+    border-top: 1px solid #3a3a3a;
+  }
+
+  .soa-explained-header {
+    font-size: 0.9rem;
+    color: #8b9cff;
+    font-weight: 600;
+    margin-bottom: 0.75rem;
+  }
+
+  .soa-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+    gap: 0.75rem;
+    background: #0f0f0f;
+    border-radius: 4px;
+    padding: 1rem;
+  }
+
+  .soa-field {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+  }
+
+  .soa-label {
+    font-size: 0.85rem;
+    color: #888;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+
+  .soa-value {
+    font-family: 'Courier New', monospace;
+    color: #b0b0b0;
+    font-size: 0.95rem;
+    font-weight: bold;
+    word-break: break-all;
+  }
+
+  .spf-warning {
+    background: #3a2100;
+    border-left: 4px solid #ff9800;
+    color: #ffb74d;
+    padding: 1rem;
+    margin-bottom: 1rem;
+    border-radius: 4px;
+    font-size: 0.95rem;
+    line-height: 1.6;
+    font-weight: 500;
+  }
+
   .no-records {
     color: #888;
     font-style: italic;
@@ -958,6 +1074,29 @@
 
     .record-data {
       font-size: 0.95rem;
+    }
+
+    .soa-explained-header {
+      font-size: 0.85rem;
+    }
+
+    .soa-grid {
+      grid-template-columns: 1fr;
+      padding: 0.75rem;
+      gap: 0.6rem;
+    }
+
+    .soa-label {
+      font-size: 0.8rem;
+    }
+
+    .soa-value {
+      font-size: 0.9rem;
+    }
+
+    .spf-warning {
+      font-size: 0.9rem;
+      padding: 0.75rem;
     }
   }
 </style>
