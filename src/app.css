@@ -1,26 +1,66 @@
-/* Global reset and base styles */
-* {
-  box-sizing: border-box;
-}
-
+/* ── Design tokens ──────────────────────────────────── */
 :root {
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+  /* Surface palette */
+  --bg-base:      #0f1319;
+  --bg-surface:   #161d2e;
+  --bg-raised:    #1c2438;
+  --border:       #232b3e;
+  --border-bright:#2f3d5c;
+
+  /* Text */
+  --text-1:     #e6edf3;
+  --text-2:     #9aaac8;
+
+  /* Accent & status */
+  --accent:     #58a6ff;
+  --pass:       #3fb950;
+  --warn:       #d29922;
+  --fail:       #f85149;
+  --info:       #58a6ff;
+
+  /* Semantic value colors */
+  --color-ip:       #79c0ff;   /* IP addresses */
+  --color-priority: #e3b341;   /* MX/record priorities */
+  --color-domain:   #d2a8ff;   /* Hostname/domain values */
+  --color-policy:   #3fb950;   /* Policy/config values (good) */
+  --color-key:      #7a86a0;   /* Record key labels */
+
+  /* Section identity colors */
+  --ns-color:     #a78bfa;
+  --soa-color:    #fb923c;
+  --mx-color:     #facc15;
+  --email-color:  #22d3ee;
+  --www-color:    #4ade80;
+
+  /* Typography */
+  font-family: 'Syne', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   line-height: 1.5;
   font-weight: 400;
-  color-scheme: light;
+  color-scheme: dark;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
 
+/* ── Reset ──────────────────────────────────────────── */
+* {
+  box-sizing: border-box;
+}
+
 body {
   margin: 0;
-  display: flex;
   min-width: 320px;
   min-height: 100vh;
+  background: var(--bg-base);
+  color: var(--text-1);
 }
 
 #app {
   width: 100%;
+}
+
+/* ── Monospace utility ──────────────────────────────── */
+.mono {
+  font-family: 'IBM Plex Mono', 'Courier New', monospace;
 }

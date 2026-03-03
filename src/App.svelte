@@ -1,178 +1,33 @@
 <script>
   import { onMount } from 'svelte';
+  import ReportView from './components/ReportView.svelte';
+  import { performLookup, PROVIDERS } from './lib/dns.js';
 
-  // Record types to query
-  const RECORD_TYPES = {
-    usual: ['SOA', 'A', 'AAAA', 'TXT', 'MX', 'NS', 'CAA'],
-    emailSecurity: [
-      { type: 'TXT', name: '_dmarc', label: '_dmarc (TXT)' },
-      { type: 'A', name: 'mta-sts', label: 'mta-sts (A)' },
-      { type: 'AAAA', name: 'mta-sts', label: 'mta-sts (AAAA)' },
-      { type: 'TXT', name: '_mta-sts', label: '_mta-sts (TXT)' },
-      { type: 'TXT', name: '_smtp._tls', label: '_smtp._tls (TXT)' }
-    ]
-  };
+  let domain        = $state('');
+  let provider      = $state('google');
+  let dkimSelectors = $state('google, default, selector1, selector2');
+  let loading       = $state(false);
+  let error         = $state('');
+  let results       = $state(null);
+  let showToast     = $state(false);
+  let showDkim      = $state(false);
 
-  // DNS providers
-  const PROVIDERS = {
-    google: 'https://dns.google/resolve',
-    cloudflare: 'https://cloudflare-dns.com/dns-query'
-  };
-
-  let domain = '';
-  let provider = 'google';
-  let dkimSelectors = 'google, default, selector1, selector2';
-  let loading = false;
-  let error = '';
-  let results = null;
-  let showToast = false;
   let toastTimer = null;
 
-  // Parse CAA record from Cloudflare's hex format
-  function parseCAA(hexData) {
-    // Format: \# <length> <hex bytes>
-    // Hex bytes: <flags> <tag_length> <tag> <value>
-    
-    const match = hexData.match(/\\#\s+\d+\s+([\da-fA-F\s]+)/);
-    if (!match) return hexData;
-
-    const hexBytes = match[1].replace(/\s+/g, '');
-    
-    try {
-      // Parse flags (1 byte)
-      const flags = parseInt(hexBytes.substr(0, 2), 16);
-      
-      // Parse tag length (1 byte)
-      const tagLength = parseInt(hexBytes.substr(2, 2), 16);
-      
-      // Parse tag (tagLength bytes)
-      const tagHex = hexBytes.substr(4, tagLength * 2);
-      const tag = tagHex.match(/.{2}/g)
-        .map(byte => String.fromCharCode(parseInt(byte, 16)))
-        .join('');
-      
-      // Parse value (remaining bytes)
-      const valueHex = hexBytes.substr(4 + tagLength * 2);
-      const value = valueHex.match(/.{2}/g)
-        .map(byte => String.fromCharCode(parseInt(byte, 16)))
-        .join('');
-      
-      return `${flags} ${tag} "${value}"`;
-    } catch (err) {
-      console.error('Error parsing CAA record:', err);
-      return hexData;
-    }
-  }
-
-  // Query DNS records
-  async function queryDNS(recordDomain, recordType, providerUrl) {
-    const url = new URL(providerUrl);
-    url.searchParams.set('name', recordDomain);
-    url.searchParams.set('type', recordType);
-
-    const response = await fetch(url.toString(), {
-      headers: { 'Accept': 'application/dns-json' }
-    });
-
-    if (!response.ok) {
-      throw new Error(`HTTP error! status: ${response.status}`);
-    }
-
-    return await response.json();
-  }
-
-  // Perform lookup
-  async function handleLookup() {
+  async function handleSearch() {
     if (!domain.trim()) {
       error = 'Please enter a domain name';
       return;
     }
-
-    // Clean domain
-    const cleanDomain = domain.trim().toLowerCase().replace(/^https?:\/\//, '').replace(/\/$/, '');
-    
     loading = true;
-    error = '';
+    error   = '';
     results = null;
 
     try {
-      const providerUrl = PROVIDERS[provider];
-      const usualResults = {};
-      const emailSecurityResults = {};
-
-      // Query usual records
-      for (const type of RECORD_TYPES.usual) {
-        try {
-          const result = await queryDNS(cleanDomain, type, providerUrl);
-          if (result.Answer && result.Answer.length > 0) {
-            // Parse CAA records from Cloudflare's hex format
-            if (type === 'CAA' && provider === 'cloudflare') {
-              result.Answer = result.Answer.map(record => ({
-                ...record,
-                data: parseCAA(record.data)
-              }));
-            }
-            usualResults[type] = result.Answer;
-          }
-        } catch (err) {
-          console.error(`Error querying ${type}:`, err);
-        }
-      }
-
-      // Extract SPF records from root TXT records
-      if (usualResults.TXT) {
-        const spfRecords = usualResults.TXT.filter(record => 
-          record.data && record.data.toLowerCase().includes('v=spf1')
-        );
-        if (spfRecords.length > 0) {
-          emailSecurityResults['SPF (TXT)'] = spfRecords;
-        }
-      }
-
-      // Query email security records
-      for (const record of RECORD_TYPES.emailSecurity) {
-        const queryDomain = `${record.name}.${cleanDomain}`;
-        
-        try {
-          const result = await queryDNS(queryDomain, record.type, providerUrl);
-          if (result.Answer && result.Answer.length > 0) {
-            emailSecurityResults[record.label] = result.Answer;
-          }
-        } catch (err) {
-          console.error(`Error querying ${record.label}:`, err);
-        }
-      }
-
-      // Query DKIM selectors
-      if (dkimSelectors.trim()) {
-        const selectors = dkimSelectors.split(',').map(s => s.trim()).filter(s => s);
-        for (const selector of selectors) {
-          const queryDomain = `${selector}._domainkey.${cleanDomain}`;
-          const label = `${selector}._domainkey (TXT)`;
-          
-          try {
-            const result = await queryDNS(queryDomain, 'TXT', providerUrl);
-            if (result.Answer && result.Answer.length > 0) {
-              emailSecurityResults[label] = result.Answer;
-            }
-          } catch (err) {
-            console.error(`Error querying ${label}:`, err);
-          }
-        }
-      }
-
-      results = {
-        domain: cleanDomain,
-        provider: provider === 'google' ? 'dns.google' : '1.1.1.1',
-        usual: usualResults,
-        emailSecurity: emailSecurityResults
-      };
-
-      // Update browser history
-      const state = { domain: cleanDomain, provider, dkimSelectors };
-      const url = `?domain=${encodeURIComponent(cleanDomain)}&provider=${provider}&dkim=${encodeURIComponent(dkimSelectors)}`;
+      results = await performLookup(domain, provider, dkimSelectors);
+      const state = { domain: results.domain, provider, dkimSelectors };
+      const url   = `?domain=${encodeURIComponent(results.domain)}&provider=${provider}&dkim=${encodeURIComponent(dkimSelectors)}`;
       window.history.pushState(state, '', url);
-
     } catch (err) {
       error = `Error: ${err.message}`;
     } finally {
@@ -180,923 +35,448 @@
     }
   }
 
-  // Handle browser back/forward navigation
+  function handleKey(e) {
+    if (e.key === 'Enter') handleSearch();
+  }
+
   function handlePopState(event) {
-    if (event.state && event.state.domain) {
-      domain = event.state.domain;
-      provider = event.state.provider || 'google';
+    if (event.state?.domain) {
+      domain        = event.state.domain;
+      provider      = event.state.provider      || 'google';
       dkimSelectors = event.state.dkimSelectors || 'google, default, selector1, selector2';
-      handleLookup();
+      handleSearch();
     } else {
-      // Clear results when going back to initial state
       results = null;
-      domain = '';
+      domain  = '';
       provider = 'google';
       dkimSelectors = 'google, default, selector1, selector2';
     }
   }
 
-  // Check URL params on mount
-  onMount(() => {
-    window.addEventListener('popstate', handlePopState);
-
-    const params = new URLSearchParams(window.location.search);
-    const urlDomain = params.get('domain');
-    const urlProvider = params.get('provider');
-    const urlDkim = params.get('dkim');
-
-    if (urlDomain) {
-      domain = urlDomain;
-      if (urlProvider && PROVIDERS[urlProvider]) {
-        provider = urlProvider;
-      } else {
-        provider = 'google';
-      }
-      if (urlDkim) {
-        dkimSelectors = urlDkim;
-      }
-      handleLookup();
-    }
-
-    return () => {
-      window.removeEventListener('popstate', handlePopState);
-    };
-  });
-
-  // Handle Enter key
-  function handleKeyPress(event) {
-    if (event.key === 'Enter') {
-      handleLookup();
-    }
-  }
-
-  // Clear all results and reset
-  function handleClear() {
-    domain = '';
-    results = null;
-    error = '';
-    // Reset URL to clean state
-    window.history.pushState({}, '', window.location.pathname);
-  }
-
-  // Scroll to section
-  function scrollToSection(sectionId) {
-    const element = document.getElementById(sectionId);
-    if (element) {
-      element.scrollIntoView({ behavior: 'smooth', block: 'start' });
-    }
-  }
-
-  // Get all available record types from results
-  function getAvailableRecords() {
-    if (!results) return { usual: [], emailSecurity: [] };
-    
-    return {
-      usual: Object.keys(results.usual),
-      emailSecurity: Object.keys(results.emailSecurity)
-    };
-  }
-
-  // Parse SOA record into components
-  function parseSOA(soaData) {
-    const parts = soaData.trim().split(/\s+/);
-    if (parts.length < 7) return null;
-    
-    return {
-      mname: parts[0],        // Primary nameserver
-      rname: parts[1],        // Responsible party email
-      serial: parts[2],       // Serial number
-      refresh: parts[3],      // Refresh interval
-      retry: parts[4],        // Retry interval
-      expire: parts[5],       // Expire time
-      minimum: parts[6]       // Minimum TTL
-    };
-  }
-
-  // Copy record data to clipboard
   async function copyToClipboard(text) {
     try {
       await navigator.clipboard.writeText(text);
-      
-      // Clear any existing timer
-      if (toastTimer) {
-        clearTimeout(toastTimer);
-      }
-      
-      // Show toast and set new timer
-      showToast = true;
-      toastTimer = setTimeout(() => {
-        showToast = false;
-        toastTimer = null;
-      }, 2000);
+      if (toastTimer) clearTimeout(toastTimer);
+      showToast  = true;
+      toastTimer = setTimeout(() => { showToast = false; toastTimer = null; }, 2000);
     } catch (err) {
       console.error('Failed to copy:', err);
     }
   }
+
+  onMount(() => {
+    window.addEventListener('popstate', handlePopState);
+
+    const params      = new URLSearchParams(window.location.search);
+    const urlDomain   = params.get('domain');
+    const urlProvider = params.get('provider');
+    const urlDkim     = params.get('dkim');
+
+    if (urlDomain) {
+      domain = urlDomain;
+      if (urlProvider && PROVIDERS[urlProvider]) provider = urlProvider;
+      if (urlDkim) dkimSelectors = urlDkim;
+      handleSearch();
+    }
+
+    return () => window.removeEventListener('popstate', handlePopState);
+  });
 </script>
 
-<main>
-  <header>
-    <h1>🔍 dns.holywhite.com</h1>
-    <p>Query DNS records using DNS-over-HTTPS</p>
-    <p>Use at your own risk. This tool is a playground project.</p>
+<div class="app-shell">
+  <!-- ── Sticky header with inline search ── -->
+  <header class="site-header">
+    <div class="header-inner">
+      <button class="site-title" onclick={() => {
+          results = null; domain = ''; error = '';
+          window.history.pushState({}, '', window.location.pathname);
+        }}>dns.holywhite.com</button>
+
+      <div class="search-inline">
+        <select bind:value={provider} disabled={loading} class="provider-select">
+          <option value="google">dns.google</option>
+          <option value="cloudflare">1.1.1.1</option>
+        </select>
+        <div class="input-wrap">
+          <input
+            type="text"
+            bind:value={domain}
+            onkeypress={handleKey}
+            placeholder="example.com"
+            disabled={loading}
+            autocomplete="off"
+            autocapitalize="none"
+            spellcheck="false"
+          />
+          <button class="dkim-btn" onclick={() => showDkim = !showDkim} title="DKIM selectors" class:active={showDkim}>
+            ⚙
+          </button>
+        </div>
+        <button class="analyze-btn" onclick={handleSearch} disabled={loading}>
+          {loading ? '…' : 'Analyze'}
+        </button>
+      </div>
+
+      <a class="github-link" href="https://github.com/richardevs/dns-spa-2" target="_blank" rel="noopener">
+        GitHub
+      </a>
+    </div>
+
+    <!-- DKIM panel: always visible in initial state, toggle-controlled after search -->
+    {#if showDkim || !results}
+      <div class="dkim-panel">
+        <label class="dkim-label" for="dkim-input">DKIM selectors (comma-separated)</label>
+        <input
+          id="dkim-input"
+          class="dkim-input"
+          type="text"
+          bind:value={dkimSelectors}
+          placeholder="google, default, selector1, selector2"
+          disabled={loading}
+        />
+      </div>
+    {/if}
   </header>
 
-  <div class="search-section">
-    <div class="input-group">
-      <select bind:value={provider} disabled={loading}>
-        <option value="google">dns.google</option>
-        <option value="cloudflare">1.1.1.1</option>
-      </select>
-      <input
-        type="text"
-        bind:value={domain}
-        on:keypress={handleKeyPress}
-        placeholder="Enter domain (e.g., example.com)"
-        disabled={loading}
-      />
-      <button on:click={handleLookup} disabled={loading}>
-        {loading ? 'Querying...' : 'Query'}
-      </button>
-      <button on:click={handleClear} disabled={loading} class="clear-btn">
-        Clear
-      </button>
-    </div>
-    <div class="dkim-group">
-      <label for="dkim-selectors">DKIM Selectors:</label>
-      <input
-        id="dkim-selectors"
-        type="text"
-        bind:value={dkimSelectors}
-        placeholder="e.g., google, default, selector1, selector2"
-        disabled={loading}
-      />
-    </div>
-  </div>
-
-  {#if loading}
-    <div class="loading">
-      <div class="spinner"></div>
-      <p>Querying DNS records...</p>
-    </div>
-  {/if}
-
-  {#if error}
-    <div class="error">{error}</div>
-  {/if}
-
-  {#if results}
-    <div class="results-container">
-      <div class="results">
-        <div class="results-header">
-          <h2>Results for: <span class="domain">{results.domain}</span></h2>
-          <p class="provider">Provider: {results.provider}</p>
-  </div>
-
-        <!-- Usual Records Section -->
-        <section class="records-section">
-          <h3>📋 Standard DNS Records</h3>
-          {#if Object.keys(results.usual).length > 0}
-            {#each Object.entries(results.usual) as [type, records]}
-              <div class="record-group" id="record-{type}">
-                <h4>{type}</h4>
-                <div class="record-list">
-                  {#each records as record}
-                    <div class="record-item">
-                      <span class="record-ttl">TTL: {record.TTL}s</span>
-                      <div class="record-data-wrapper">
-                        <span class="record-data">{record.data}</span>
-                        <button class="copy-btn" on:click={() => copyToClipboard(record.data)} title="Copy to clipboard">
-                          📋
-                        </button>
-                      </div>
-                      
-                      {#if type === 'SOA'}
-                        {@const soa = parseSOA(record.data)}
-                        {#if soa}
-                          <div class="soa-explained">
-                            <div class="soa-explained-header">SOA Fields Explained:</div>
-                            <div class="soa-grid">
-                              <div class="soa-field">
-                                <span class="soa-label">Primary Nameserver:</span>
-                                <span class="soa-value">{soa.mname}</span>
-                              </div>
-                              <div class="soa-field">
-                                <span class="soa-label">Responsible Party:</span>
-                                <span class="soa-value">{soa.rname}</span>
-                              </div>
-                              <div class="soa-field">
-                                <span class="soa-label">Serial:</span>
-                                <span class="soa-value">{soa.serial}</span>
-                              </div>
-                              <div class="soa-field">
-                                <span class="soa-label">Refresh:</span>
-                                <span class="soa-value">{soa.refresh}s</span>
-                              </div>
-                              <div class="soa-field">
-                                <span class="soa-label">Retry:</span>
-                                <span class="soa-value">{soa.retry}s</span>
-                              </div>
-                              <div class="soa-field">
-                                <span class="soa-label">Expire:</span>
-                                <span class="soa-value">{soa.expire}s</span>
-                              </div>
-                              <div class="soa-field">
-                                <span class="soa-label">Minimum TTL:</span>
-                                <span class="soa-value">{soa.minimum}s</span>
-                              </div>
-                            </div>
-                          </div>
-                        {/if}
-                      {/if}
-                    </div>
-                  {/each}
-                </div>
-              </div>
-            {/each}
-          {:else}
-            <p class="no-records">No standard records found</p>
-          {/if}
-        </section>
-
-        <!-- Email Security Section -->
-        <section class="records-section">
-          <h3>🔒 Email Security Records</h3>
-          {#if Object.keys(results.emailSecurity).length > 0}
-            {#each Object.entries(results.emailSecurity) as [label, records]}
-              <div class="record-group" id="record-{label}">
-                <h4>{label}</h4>
-                {#if label === 'SPF (TXT)' && records.length > 1}
-                  <div class="spf-warning">
-                    ⚠️ Warning: Multiple SPF records detected! A domain must have only ONE SPF record. Having multiple SPF records is invalid and will cause SPF checks to fail.
-                  </div>
-                {/if}
-                <div class="record-list">
-                  {#each records as record}
-                    <div class="record-item">
-                      <span class="record-ttl">TTL: {record.TTL}s</span>
-                      <div class="record-data-wrapper">
-                        <span class="record-data">{record.data}</span>
-                        <button class="copy-btn" on:click={() => copyToClipboard(record.data)} title="Copy to clipboard">
-                          📋
-                        </button>
-                      </div>
-                    </div>
-                  {/each}
-                </div>
-              </div>
-            {/each}
-          {:else}
-            <p class="no-records">No email security records found</p>
-          {/if}
-        </section>
+  <!-- ── Main content ── -->
+  <main class="main-content">
+    {#if !results && !loading && !error}
+      <div class="welcome">
+        <h1 class="welcome-title">DNS Analyzer</h1>
+        <p class="welcome-sub">Query DNS records via DNS-over-HTTPS. Enter a domain above to get started.</p>
       </div>
-    </div>
+    {/if}
 
-    <!-- Floating Navigation -->
-    <aside class="floating-index">
-        <h4>Navigation</h4>
-        <div class="index-section">
-          <p class="index-category">Standard</p>
-          {#each getAvailableRecords().usual as type}
-            <button class="index-link" on:click={() => scrollToSection(`record-${type}`)}>
-              {type}
-            </button>
-          {/each}
-        </div>
-        {#if getAvailableRecords().emailSecurity.length > 0}
-          <div class="index-section">
-            <p class="index-category">Security</p>
-            {#each getAvailableRecords().emailSecurity as type}
-              <button class="index-link" on:click={() => scrollToSection(`record-${type}`)}>
-                {type}
-              </button>
-            {/each}
-          </div>
-        {/if}
-      </aside>
-  {/if}
-</main>
+    {#if loading}
+      <div class="loading-state">
+        <div class="spinner"></div>
+        <p>Querying DNS records…</p>
+      </div>
+    {/if}
 
-<footer>
-  <p>Source: <a href="https://github.com/richardevs/dns-spa-2">GitHub</a></p>
-</footer>
+    {#if error}
+      <div class="error-state">{error}</div>
+    {/if}
 
-<!-- Toast Notification -->
+    {#if results}
+      <ReportView {results} onCopy={copyToClipboard} />
+    {/if}
+  </main>
+
+  <footer class="site-footer">
+    <p>
+      <a href="https://github.com/richardevs/dns-spa-2" target="_blank" rel="noopener">GitHub</a>
+      &middot; DNS-over-HTTPS &middot; Educational use
+    </p>
+  </footer>
+</div>
+
 {#if showToast}
-  <div class="toast">
-    ✓ Copied
-  </div>
+  <div class="toast">✓ Copied</div>
 {/if}
 
 <style>
-  :global(body) {
-    margin: 0;
-    padding: 0;
-    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
-    background: #1a1a1a;
+  .app-shell {
+    display: flex;
+    flex-direction: column;
     min-height: 100vh;
   }
 
-  main {
+  /* ── Header ── */
+  .site-header {
+    position: sticky;
+    top: 0;
+    z-index: 100;
+    background: var(--bg-surface);
+    border-bottom: 1px solid var(--border);
+    backdrop-filter: blur(8px);
+  }
+
+  .header-inner {
     max-width: 1100px;
     margin: 0 auto;
-    padding: 2rem 1rem;
-    min-height: calc(100vh - 100px);
-  }
-
-  header {
-    text-align: center;
-    color: #e0e0e0;
-    margin-bottom: 2rem;
-  }
-
-  header h1 {
-    font-size: 2.5rem;
-    margin: 0 0 0.5rem 0;
-    font-weight: 700;
-  }
-
-  header p {
-    font-size: 1.1rem;
-    margin: 0;
-    opacity: 0.7;
-  }
-
-  .search-section {
-    background: #2a2a2a;
-    padding: 2rem;
-    border-radius: 12px;
-    box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5);
-    margin-bottom: 2rem;
-  }
-
-  .input-group {
+    padding: 0.6rem 1.25rem;
     display: flex;
-    gap: 0.5rem;
-    flex-wrap: wrap;
+    align-items: center;
+    gap: 1rem;
   }
 
-  .dkim-group {
-    margin-top: 1rem;
+  .site-title {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 0.82rem;
+    font-weight: 500;
+    color: var(--accent);
+    flex-shrink: 0;
+    white-space: nowrap;
+    background: none;
+    border: none;
+    padding: 0;
+    cursor: pointer;
+    opacity: 1;
+    transition: opacity 0.15s;
+  }
+
+  .site-title:hover { opacity: 0.7; }
+
+  /* ── Inline search ── */
+  .search-inline {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    gap: 0;
+    max-width: 560px;
+    border: 1px solid var(--border);
+    border-radius: 7px;
+    overflow: hidden;
+    background: var(--bg-raised);
+    transition: border-color 0.15s;
+  }
+
+  .search-inline:focus-within {
+    border-color: var(--accent);
+  }
+
+  .provider-select {
+    padding: 0.5rem 1.6rem 0.5rem 0.7rem;
+    background: var(--bg-surface);
+    border: none;
+    border-right: 1px solid var(--border);
+    color: var(--text-1);
+    font-size: 0.8rem;
+    cursor: pointer;
+    outline: none;
+    flex-shrink: 0;
+    appearance: none;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='9' height='9' viewBox='0 0 9 9'%3E%3Cpath fill='%238b949e' d='M4.5 6.5L1 2.5h7z'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 0.4rem center;
+    font-family: 'IBM Plex Mono', monospace;
+  }
+
+  .provider-select:disabled { opacity: 0.5; cursor: not-allowed; }
+
+  .input-wrap {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    min-width: 0;
+  }
+
+  .input-wrap input {
+    flex: 1;
+    padding: 0.5rem 0.6rem;
+    background: transparent;
+    border: none;
+    color: var(--text-1);
+    font-size: 0.9rem;
+    outline: none;
+    min-width: 0;
+    font-family: 'IBM Plex Mono', monospace;
+  }
+
+  .input-wrap input::placeholder { color: var(--text-2); }
+  .input-wrap input:disabled { opacity: 0.5; cursor: not-allowed; }
+
+  .dkim-btn {
+    flex-shrink: 0;
+    background: transparent;
+    border: none;
+    border-left: 1px solid var(--border);
+    color: var(--text-2);
+    cursor: pointer;
+    padding: 0.35rem 0.6rem;
+    font-size: 1rem;
+    transition: color 0.15s, background 0.15s;
+    line-height: 1;
+  }
+
+  .dkim-btn:hover, .dkim-btn.active { color: var(--accent); background: var(--bg-surface); }
+
+  .analyze-btn {
+    flex-shrink: 0;
+    padding: 0.5rem 1rem;
+    background: var(--accent);
+    color: #0d1117;
+    border: none;
+    font-size: 0.85rem;
+    font-weight: 700;
+    cursor: pointer;
+    transition: opacity 0.15s;
+    font-family: 'Syne', sans-serif;
+    white-space: nowrap;
+  }
+
+  .analyze-btn:hover:not(:disabled) { opacity: 0.85; }
+  .analyze-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+  /* ── DKIM panel ── */
+  .dkim-panel {
+    max-width: 1100px;
+    margin: 0 auto;
+    padding: 0.5rem 1.25rem 0.65rem;
     display: flex;
     align-items: center;
     gap: 0.75rem;
+    border-top: 1px solid var(--border);
   }
 
-  .dkim-group label {
-    font-size: 0.95rem;
-    color: #e0e0e0;
+  .dkim-label {
+    font-size: 0.75rem;
+    color: var(--text-2);
     white-space: nowrap;
-    font-weight: 500;
-  }
-
-  .dkim-group input {
-    flex: 1;
-    height: 40px;
-    font-size: 0.9rem;
-  }
-
-  select {
-    min-width: 160px;
-    padding: 0.75rem 2.5rem 0.75rem 1rem;
-    border: 2px solid #3a3a3a;
-    border-radius: 8px;
-    font-size: 1rem;
-    background: #1a1a1a;
-    color: #e0e0e0;
-    cursor: pointer;
-    transition: border-color 0.3s;
-    height: 48px;
-    appearance: none;
-    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%23e0e0e0' d='M6 9L1 4h10z'/%3E%3C/svg%3E");
-    background-repeat: no-repeat;
-    background-position: right 1rem center;
-    background-size: 12px;
-  }
-
-  select:focus {
-    outline: none;
-    border-color: #667eea;
-  }
-
-  select:disabled {
-    background: #333;
-    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%23999' d='M6 9L1 4h10z'/%3E%3C/svg%3E");
-    background-repeat: no-repeat;
-    background-position: right 1rem center;
-    background-size: 12px;
-    cursor: not-allowed;
-  }
-
-  input {
-    flex: 1;
-    min-width: 200px;
-    padding: 0.75rem 1rem;
-    border: 2px solid #3a3a3a;
-    border-radius: 8px;
-    font-size: 1rem;
-    background: #1a1a1a;
-    color: #e0e0e0;
-    transition: border-color 0.3s;
-    height: 48px;
-  }
-
-  input:focus {
-    outline: none;
-    border-color: #667eea;
-  }
-
-  input:disabled {
-    background: #333;
-    cursor: not-allowed;
-  }
-
-  button {
-    padding: 0.75rem 2rem;
-    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-    color: white;
-    border: none;
-    border-radius: 8px;
-    font-size: 1rem;
     font-weight: 600;
-    cursor: pointer;
-    transition: transform 0.2s, box-shadow 0.2s;
-    height: 48px;
+    flex-shrink: 0;
   }
 
-  button:active:not(:disabled) {
-    transform: scale(0.98);
+  .dkim-input {
+    flex: 1;
+    max-width: 480px;
+    padding: 0.38rem 0.65rem;
+    background: var(--bg-raised);
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    color: var(--text-1);
+    font-size: 0.83rem;
+    outline: none;
+    font-family: 'IBM Plex Mono', monospace;
+    transition: border-color 0.15s;
   }
 
-  button:disabled {
-    opacity: 0.6;
-    cursor: not-allowed;
+  .dkim-input:focus { border-color: var(--accent); }
+
+  .github-link {
+    font-size: 0.78rem;
+    color: var(--text-2);
+    text-decoration: none;
+    transition: color 0.15s;
+    flex-shrink: 0;
+    white-space: nowrap;
   }
 
-  button.clear-btn {
-    background: #3a3a3a;
-    color: #b0b0b0;
-    border: 2px solid #4a4a4a;
+  .github-link:hover { color: var(--text-1); }
+
+  /* ── Main ── */
+  .main-content {
+    max-width: 1100px;
+    margin: 0 auto;
+    padding: 1.75rem 1.25rem;
+    width: 100%;
+    flex: 1;
   }
 
-  button.clear-btn:active:not(:disabled) {
-    background: #4a4a4a;
-    color: #e0e0e0;
-  }
-
-  .loading {
-    background: #2a2a2a;
-    padding: 3rem;
-    border-radius: 12px;
+  /* ── Welcome state ── */
+  .welcome {
     text-align: center;
-    box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5);
-    color: #e0e0e0;
+    padding: 5rem 1rem;
+  }
+
+  .welcome-title {
+    margin: 0 0 0.75rem;
+    font-size: 2.2rem;
+    font-weight: 700;
+    color: var(--text-1);
+    letter-spacing: -0.5px;
+  }
+
+  .welcome-sub {
+    margin: 0;
+    font-size: 1rem;
+    color: var(--text-2);
+    max-width: 460px;
+    margin: 0 auto;
+    line-height: 1.6;
+  }
+
+  /* ── Loading ── */
+  .loading-state {
+    text-align: center;
+    padding: 4rem;
+    color: var(--text-2);
   }
 
   .spinner {
-    width: 50px;
-    height: 50px;
+    width: 36px;
+    height: 36px;
     margin: 0 auto 1rem;
-    border: 4px solid #3a3a3a;
-    border-top: 4px solid #667eea;
+    border: 3px solid var(--bg-raised);
+    border-top-color: var(--accent);
     border-radius: 50%;
-    animation: spin 1s linear infinite;
+    animation: spin 0.75s linear infinite;
   }
 
-  @keyframes spin {
-    0% { transform: rotate(0deg); }
-    100% { transform: rotate(360deg); }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* ── Error ── */
+  .error-state {
+    background: rgba(248, 81, 73, 0.07);
+    border: 1px solid var(--fail);
+    border-left-width: 4px;
+    color: var(--fail);
+    padding: 0.75rem 1rem;
+    border-radius: 6px;
+    margin-bottom: 1.5rem;
+    font-size: 0.875rem;
   }
 
-  .error {
-    background: #3a1f1f;
-    color: #ff6b6b;
-    padding: 1rem;
-    border-radius: 8px;
-    border-left: 4px solid #ff6b6b;
-    margin-bottom: 1rem;
-  }
-
-  .results-container {
-    max-width: 1100px;
-    margin: 0 auto;
-    position: relative;
-  }
-
-  .floating-index {
-    position: fixed;
-    right: max(1rem, calc((100vw - 1100px) / 2 - 140px - 2rem));
-    bottom: 4rem;
-    width: 140px;
-    max-height: 80vh;
-    overflow-y: auto;
-    background: rgba(42, 42, 42, 0.95);
-    backdrop-filter: blur(10px);
-    padding: 1rem 0.75rem;
-    border-radius: 8px;
-    border: 1px solid rgba(102, 126, 234, 0.3);
-    scrollbar-width: thin;
-    scrollbar-color: #667eea rgba(42, 42, 42, 0.5);
-  }
-
-  .floating-index::-webkit-scrollbar {
-    width: 4px;
-  }
-
-  .floating-index::-webkit-scrollbar-track {
-    background: transparent;
-  }
-
-  .floating-index::-webkit-scrollbar-thumb {
-    background: #667eea;
-    border-radius: 2px;
-  }
-
-  .floating-index h4 {
-    margin: 0 0 0.75rem 0;
-    font-size: 0.85rem;
-    color: #667eea;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 1.5px;
-    opacity: 0.9;
-  }
-
-  .index-section {
-    margin-bottom: 1rem;
-  }
-
-  .index-section:last-child {
-    margin-bottom: 0;
-  }
-
-  .index-category {
-    font-size: 0.7rem;
-    color: #888;
-    text-transform: uppercase;
-    font-weight: 600;
-    letter-spacing: 0.8px;
-    margin: 0 0 0.4rem 0;
-    opacity: 0.6;
-  }
-
-  .index-link {
-    display: block;
-    width: 100%;
-    text-align: left;
-    padding: 0.4rem 0.5rem;
-    margin-bottom: 0.15rem;
-    background: transparent;
-    border: none;
-    color: #8b9cff;
-    font-size: 0.8rem;
-    font-weight: 500;
-    cursor: pointer;
-    border-radius: 4px;
-    transition: all 0.2s;
-    font-family: 'Courier New', monospace;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-
-  .index-link:active {
-    background: rgba(102, 126, 234, 0.3);
-    color: #fff;
-  }
-
-  .results {
-    background: #2a2a2a;
-    padding: 2.5rem;
-    border-radius: 12px;
-    box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5);
-  }
-
-  .results-header {
-    margin-bottom: 2.5rem;
-    padding-bottom: 1.25rem;
-    border-bottom: 3px solid #3a3a3a;
-  }
-
-  .results-header h2 {
-    margin: 0 0 0.75rem 0;
-    font-size: 1.75rem;
-    color: #e0e0e0;
-    font-weight: 700;
-  }
-
-  .domain {
-    color: #8b9cff;
-    font-family: 'Courier New', monospace;
-    font-weight: 600;
-  }
-
-  .provider {
-    margin: 0;
-    color: #999;
-    font-size: 1rem;
-    font-weight: 500;
-  }
-
-  .records-section {
-    margin-bottom: 3rem;
-  }
-
-  .records-section:last-child {
-    margin-bottom: 0;
-  }
-
-  .records-section h3 {
-    color: #e0e0e0;
-    margin: 0 0 1.5rem 0;
-    font-size: 1.5rem;
-    font-weight: 700;
-    padding-bottom: 0.5rem;
-    border-bottom: 2px solid #3a3a3a;
-  }
-
-  .record-group {
-    margin-bottom: 2rem;
-  }
-
-  .record-group h4 {
-    margin: 0 0 0.75rem 0;
-    color: #8b9cff;
-    font-size: 1.2rem;
-    font-weight: 700;
-    letter-spacing: 0.5px;
-  }
-
-  .record-list {
-    display: flex;
-    flex-direction: column;
-    gap: 0.75rem;
-  }
-
-  .record-item {
-    background: #1a1a1a;
-    padding: 1rem 1.25rem;
-    border-radius: 8px;
-    border-left: 4px solid #667eea;
-    display: flex;
-    flex-direction: column;
-    gap: 0.5rem;
-  }
-
-  .record-ttl {
-    font-size: 0.9rem;
-    color: #888;
-    font-weight: 500;
-  }
-
-  .record-data-wrapper {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    background: #0f0f0f;
-    border-radius: 4px;
-    padding: 0.5rem;
-  }
-
-  .record-data {
-    flex: 1;
-    font-family: 'Courier New', monospace;
-    color: #b0b0b0;
-    font-size: 1rem;
-    font-weight: bold;
-    word-break: break-all;
-    line-height: 1.6;
-  }
-
-  .copy-btn {
-    flex-shrink: 0;
-    padding: 0.3rem;
-    background: transparent;
-    border: none;
-    font-size: 1rem;
-    color: #999;
-    cursor: pointer;
-    transition: all 0.2s;
-    opacity: 0.5;
-    border-radius: 4px;
-    width: auto;
-    min-width: auto;
-  }
-
-  .copy-btn:hover {
-    opacity: 1;
-    background: rgba(102, 126, 234, 0.1);
-  }
-
-  .copy-btn:active {
-    opacity: 1;
-    transform: scale(0.9);
-  }
-
-  .soa-explained {
-    margin-top: 0.75rem;
-    padding-top: 0.75rem;
-    border-top: 1px solid #3a3a3a;
-  }
-
-  .soa-explained-header {
-    font-size: 0.9rem;
-    color: #8b9cff;
-    font-weight: 600;
-    margin-bottom: 0.75rem;
-  }
-
-  .soa-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
-    gap: 0.75rem;
-    background: #0f0f0f;
-    border-radius: 4px;
-    padding: 1rem;
-  }
-
-  .soa-field {
-    display: flex;
-    flex-direction: column;
-    gap: 0.25rem;
-  }
-
-  .soa-label {
-    font-size: 0.85rem;
-    color: #888;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
-  }
-
-  .soa-value {
-    font-family: 'Courier New', monospace;
-    color: #b0b0b0;
-    font-size: 0.95rem;
-    font-weight: bold;
-    word-break: break-all;
-  }
-
-  .spf-warning {
-    background: #3a2100;
-    border-left: 4px solid #ff9800;
-    color: #ffb74d;
-    padding: 1rem;
-    margin-bottom: 1rem;
-    border-radius: 4px;
-    font-size: 0.95rem;
-    line-height: 1.6;
-    font-weight: 500;
-  }
-
-  .no-records {
-    color: #888;
-    font-style: italic;
-    margin: 1rem 0;
-    font-size: 1rem;
-    padding: 1rem;
-    background: #1a1a1a;
-    border-radius: 8px;
+  /* ── Footer ── */
+  .site-footer {
+    border-top: 1px solid var(--border);
+    padding: 1.1rem 1.25rem;
     text-align: center;
+    color: var(--text-2);
+    font-size: 0.78rem;
   }
 
-  footer {
-    text-align: center;
-    color: #888;
-    padding: 2rem 1rem;
-    font-size: 0.9rem;
-  }
+  .site-footer p { margin: 0; }
 
-  footer p {
-    margin: 0;
-  }
-
-  footer a {
-    color: #8b9cff;
+  .site-footer a {
+    color: var(--accent);
     text-decoration: none;
   }
 
+  .site-footer a:hover { text-decoration: underline; }
+
+  /* ── Toast ── */
   .toast {
     position: fixed;
-    bottom: 2rem;
+    bottom: 1.75rem;
     left: 50%;
     transform: translateX(-50%);
-    background: #4ade80;
-    color: #1a1a1a;
-    padding: 0.75rem 1.5rem;
-    border-radius: 8px;
-    font-weight: 600;
-    font-size: 0.95rem;
-    box-shadow: 0 4px 12px rgba(74, 222, 128, 0.3);
-    animation: slideUp 0.3s ease-out;
+    background: var(--pass);
+    color: #0d1117;
+    padding: 0.5rem 1.1rem;
+    border-radius: 20px;
+    font-weight: 700;
+    font-size: 0.82rem;
+    box-shadow: 0 4px 14px rgba(63, 185, 80, 0.3);
+    animation: slideUp 0.22s ease-out;
     z-index: 1000;
   }
 
   @keyframes slideUp {
-    from {
-      opacity: 0;
-      transform: translateX(-50%) translateY(1rem);
-    }
-    to {
-      opacity: 1;
-      transform: translateX(-50%) translateY(0);
-    }
+    from { opacity: 0; transform: translateX(-50%) translateY(0.5rem); }
+    to   { opacity: 1; transform: translateX(-50%) translateY(0); }
   }
 
-  @media (max-width: 1400px) {
-    .floating-index {
-      display: none;
-    }
-  }
-
+  /* ── Responsive ── */
   @media (max-width: 768px) {
-    header h1 {
-      font-size: 2rem;
-    }
-
-    .input-group {
-      flex-direction: column;
-    }
-
-    .dkim-group {
-      flex-direction: column;
-      align-items: stretch;
+    .header-inner {
+      flex-wrap: wrap;
       gap: 0.5rem;
     }
 
-    .dkim-group label {
-      font-size: 0.9rem;
-    }
+    .site-title { order: 1; }
+    .github-link { order: 2; margin-left: auto; }
+    .search-inline { order: 3; flex: 1 1 100%; max-width: none; }
 
-    input, select, button {
-      width: 100%;
-      height: 48px;
+    .main-content {
+      padding: 1.25rem 1rem;
     }
+  }
 
-    .floating-index {
-      padding: 1rem;
-    }
-
-    .floating-index h4 {
-      font-size: 1rem;
-    }
-
-    .index-link {
-      font-size: 0.85rem;
-      padding: 0.4rem 0.6rem;
-    }
-
-    .results {
-      padding: 1.5rem;
-    }
-
-    .results-header h2 {
-      font-size: 1.4rem;
-    }
-
-    .records-section h3 {
-      font-size: 1.3rem;
-    }
-
-    .record-group h4 {
-      font-size: 1.1rem;
-    }
-
-    .record-item {
-      padding: 1rem;
-    }
-
-    .copy-btn {
-      padding: 0.25rem;
-      font-size: 0.9rem;
-    }
-
-    .record-data {
-      font-size: 0.95rem;
-    }
-
-    .soa-explained-header {
-      font-size: 0.85rem;
-    }
-
-    .soa-grid {
-      grid-template-columns: 1fr;
-      padding: 0.75rem;
-      gap: 0.6rem;
-    }
-
-    .soa-label {
-      font-size: 0.8rem;
-    }
-
-    .soa-value {
-      font-size: 0.9rem;
-    }
-
-    .spf-warning {
-      font-size: 0.9rem;
-      padding: 0.75rem;
+  @media (max-width: 480px) {
+    .analyze-btn {
+      padding: 0.5rem 0.7rem;
     }
   }
 </style>
