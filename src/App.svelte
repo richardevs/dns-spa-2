@@ -115,14 +115,20 @@
             autocapitalize="none"
             spellcheck="false"
           />
-          <button class="dkim-btn" onclick={() => showDkim = !showDkim} title="DKIM selectors" class:active={showDkim}>
-            ⚙
-          </button>
         </div>
         <button class="analyze-btn" onclick={handleSearch} disabled={loading}>
           {loading ? '…' : 'Analyze'}
         </button>
       </div>
+      <button
+        class="dkim-btn"
+        onclick={() => showDkim = !showDkim}
+        title="DKIM selectors"
+        aria-expanded={showDkim}
+        class:active={showDkim}
+      >
+        ⚙ DKIM
+      </button>
     </div>
 
     <!-- DKIM panel: always visible in initial state, toggle-controlled after search -->
@@ -304,17 +310,29 @@
   .dkim-btn {
     flex-shrink: 0;
     background: transparent;
-    border: none;
-    border-left: 1px solid var(--border);
+    border: 1px solid var(--border);
+    border-radius: 3px;
     color: var(--text-2);
     cursor: pointer;
-    padding: 0.35rem 0.6rem;
-    font-size: 1rem;
-    transition: color 0.15s, background 0.15s;
+    padding: 0.5rem 0.75rem;
+    font-size: 0.85rem;
+    font-weight: 700;
+    font-family: 'IBM Plex Mono', monospace;
+    transition: color 0.15s, background 0.15s, border-color 0.15s;
     line-height: 1;
+    white-space: nowrap;
   }
 
-  .dkim-btn:hover, .dkim-btn.active { color: var(--accent); background: var(--bg-surface); }
+  .dkim-btn:hover {
+    color: var(--text-1);
+    border-color: var(--border-bright);
+  }
+
+  .dkim-btn.active {
+    color: var(--accent);
+    border-color: var(--accent);
+    background: color-mix(in srgb, var(--accent) 10%, transparent);
+  }
 
   .analyze-btn {
     flex-shrink: 0;
