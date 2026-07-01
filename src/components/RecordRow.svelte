@@ -79,7 +79,7 @@
               class="asn-chip"
               style="color:{record.asnColor ?? 'var(--text-2)'}"
               title={record.asnGroups?.[0]?.name ?? ''}
-            >AS{record.asns[0]}</span>
+            >AS{record.asns[0]}{record.asnGroups?.[0]?.nameShort ? ` · ${record.asnGroups[0].nameShort}` : ''}</span>
           {:else if record.asns?.length > 1}
             <span
               class="asn-chip multi"
@@ -91,7 +91,7 @@
           <div class="ns-asn-groups">
             {#each record.asnGroups as group}
               <div class="asn-group">
-                <span class="asn-group-label mono" style="color:{group.color ?? 'var(--text-2)'}" title={group.name ?? ''}>
+                <span class="asn-chip" style="color:{group.color ?? 'var(--text-2)'}" title={group.name ?? ''}>
                   {group.asn ? `AS${group.asn}` : 'unresolved'}{group.nameShort ? ` · ${group.nameShort}` : ''}
                 </span>
                 <div class="ns-ips">
@@ -319,13 +319,8 @@
   .asn-group {
     display: flex;
     flex-direction: column;
+    align-items: flex-start;
     gap: 0.22rem;
-  }
-
-  .asn-group-label {
-    font-size: 0.68rem;
-    font-weight: 600;
-    opacity: 0.85;
   }
 
   .ns-ips {

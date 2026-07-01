@@ -56,7 +56,14 @@
     // undercount real diversity.
     const nsRecords = usual.NS || [];
     const distinctAsns = [...new Set(nsRecords.flatMap(r => r.asns || []))];
-    const asnColorFor = asn => ASN_PALETTE[distinctAsns.indexOf(asn) % ASN_PALETTE.length];
+    // Per-ASN coloring only helps when there are few enough networks to tell
+    // apart at a glance (within the palette size) — beyond that the colors
+    // cycle and repeat meaninglessly, and start competing visually with the
+    // blue IP chips instead of aiding scanning. Fall back to a single muted
+    // color once there are more distinct ASNs than palette colors.
+    const asnColorFor = distinctAsns.length <= ASN_PALETTE.length
+      ? asn => ASN_PALETTE[distinctAsns.indexOf(asn) % ASN_PALETTE.length]
+      : () => 'color-mix(in srgb, var(--ns-color) 50%, var(--text-2))';
     const nsRecordsWithColor = nsRecords.map(r => ({
       ...r,
       asnColor: r.asns?.length === 1 ? asnColorFor(r.asns[0]) : null,
