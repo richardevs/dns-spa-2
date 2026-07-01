@@ -10,9 +10,10 @@
     "deploy": "pnpm run build && gh-pages -d dist"
   },
   "devDependencies": {
-    "@sveltejs/vite-plugin-svelte": "^6.2.1",
+    "@sveltejs/vite-plugin-svelte": "^6.2.4",
     "gh-pages": "^6.3.0",
-    "svelte": "^5.43.5",
-    "vite": "^7.2.2"
-  }
+    "svelte": "^5.56.4",
+    "vite": "^7.3.6"
+  },
+  "packageManager": "pnpm@11.9.0+sha512.bd682d5d03fe525ef7c9fd6780c6884d1e756ac4c9c9fe00c538782824310dcf90e3ddc4f53835f06dfaebd5085e41855e0bcbb3b60de2ac5bbab89e5036f03b"
 }
