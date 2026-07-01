@@ -5,11 +5,12 @@
   let {
     id,
     title,
-    records   = {},
-    analysis  = null,
-    warnings  = [],
-    color     = 'var(--accent)',
-    gridCols  = 1,
+    records     = {},
+    analysis    = null,
+    extraBadges = [],
+    warnings    = [],
+    color       = 'var(--accent)',
+    gridCols    = 1,
     onCopy
   } = $props();
 
@@ -25,6 +26,9 @@
       {#if analysis}
         <StatusBadge status={analysis.status} label={analysis.message} />
       {/if}
+      {#each extraBadges as badge}
+        <StatusBadge status={badge.status} label={badge.message} />
+      {/each}
     </div>
     <div class="header-right">
       <span class="record-count">{recordCount} record{recordCount !== 1 ? 's' : ''}</span>

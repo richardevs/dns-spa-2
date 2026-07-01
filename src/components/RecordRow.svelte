@@ -5,6 +5,7 @@
     parseDMARC, parseMTASTS, parseTLSRPT, parseDKIM,
     parseSPF, parseMX, parseCAAsimple
   } from '../lib/parsers.js';
+  import StatusBadge from './StatusBadge.svelte';
 
   let { record, type, onCopy } = $props();
 
@@ -70,7 +71,25 @@
 
     <!-- ── NS ── -->
     {:else if renderType === 'ns'}
-      <span class="mono domain-val">{record.data}</span>
+      <div class="ns-block">
+        <span class="ns-row">
+          <span class="mono domain-val ns-host">{record.data}</span>
+          {#if record.asn}
+            <span
+              class="asn-chip"
+              style="color:{record.asnColor ?? 'var(--text-2)'}"
+              title={record.prefix ?? ''}
+            >AS{record.asn}</span>
+          {/if}
+        </span>
+        {#if record.ips?.length}
+          <div class="ns-ips">
+            {#each record.ips as ip}
+              <span class="ns-ip-chip mono">{ip}</span>
+            {/each}
+          </div>
+        {/if}
+      </div>
 
     <!-- ── CAA ── -->
     {:else if renderType === 'caa' && caaParsed}
@@ -84,27 +103,32 @@
 
     <!-- ── DKIM ── -->
     {:else if renderType === 'dkim' && dkimPairs}
-      <div class="kv-table">
-        {#each dkimPairs as pair}
-          {#if pair.k === 'p'}
-            <div class="kv-row">
-              <span class="kv-key">p</span>
-              <span class="kv-val mono">
-                {dkimExpanded ? pair.v : (pair.v.slice(0, 48) + (pair.v.length > 48 ? '…' : ''))}
-                {#if pair.v.length > 48}
-                  <button class="inline-toggle" onclick={() => dkimExpanded = !dkimExpanded}>
-                    {dkimExpanded ? 'collapse' : 'expand key'}
-                  </button>
-                {/if}
-              </span>
-            </div>
-          {:else}
-            <div class="kv-row">
-              <span class="kv-key">{pair.k}</span>
-              <span class="kv-val mono">{pair.v}</span>
-            </div>
-          {/if}
-        {/each}
+      <div class="dkim-block">
+        {#if record.keyLabel}
+          <StatusBadge status={record.keyStatus} label={record.keyLabel} />
+        {/if}
+        <div class="kv-table">
+          {#each dkimPairs as pair}
+            {#if pair.k === 'p'}
+              <div class="kv-row">
+                <span class="kv-key">p</span>
+                <span class="kv-val mono">
+                  {dkimExpanded ? pair.v : (pair.v.slice(0, 48) + (pair.v.length > 48 ? '…' : ''))}
+                  {#if pair.v.length > 48}
+                    <button class="inline-toggle" onclick={() => dkimExpanded = !dkimExpanded}>
+                      {dkimExpanded ? 'collapse' : 'expand key'}
+                    </button>
+                  {/if}
+                </span>
+              </div>
+            {:else}
+              <div class="kv-row">
+                <span class="kv-key">{pair.k}</span>
+                <span class="kv-val mono">{pair.v}</span>
+              </div>
+            {/if}
+          {/each}
+        </div>
       </div>
 
     <!-- ── DMARC ── -->
@@ -233,6 +257,52 @@
     flex-shrink: 0;
   }
 
+  /* ── NS ────────────────────────────────────────────── */
+  .ns-block {
+    display: flex;
+    flex-direction: column;
+    gap: 0.32rem;
+    flex: 1;
+    min-width: 0;
+  }
+
+  .ns-row {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+    min-width: 0;
+  }
+
+  .ns-host { flex: 0 1 auto; }
+
+  .asn-chip {
+    font-size: 0.69rem;
+    font-weight: 700;
+    letter-spacing: 0.3px;
+    padding: 0.1rem 0.38rem;
+    border-radius: 3px;
+    border: 1px solid;
+    background: color-mix(in srgb, currentColor 12%, transparent);
+    flex-shrink: 0;
+    font-family: 'IBM Plex Mono', monospace;
+  }
+
+  .ns-ips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.35rem;
+  }
+
+  .ns-ip-chip {
+    font-size: 0.72rem;
+    color: var(--color-ip);
+    background: rgba(88, 166, 255, 0.08);
+    border: 1px solid rgba(88, 166, 255, 0.2);
+    padding: 0.05rem 0.32rem;
+    border-radius: 3px;
+  }
+
   /* ── MX ────────────────────────────────────────────── */
   .mx-priority {
     flex-shrink: 0;
@@ -263,6 +333,15 @@
     padding: 0.08rem 0.35rem;
     border-radius: 3px;
     flex-shrink: 0;
+  }
+
+  /* ── DKIM ──────────────────────────────────────────── */
+  .dkim-block {
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+    flex: 1;
+    min-width: 0;
   }
 
   /* ── Key-value table (DMARC/SPF/DKIM/MTA-STS/TLS-RPT) */

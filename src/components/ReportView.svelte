@@ -3,6 +3,9 @@
   import CategorySection from './CategorySection.svelte';
   import HealthSummary from './HealthSummary.svelte';
   import { analyzeResults } from '../lib/analysis.js';
+  import { parseSOA } from '../lib/dns.js';
+
+  const ASN_PALETTE = ['var(--color-ip)', 'var(--color-priority)', 'var(--color-domain)', 'var(--pass)'];
 
   let { results, onCopy } = $props();
 
@@ -18,25 +21,79 @@
       ? [`Multiple SPF records detected (${spfCount}). RFC 7208 requires exactly one — having more causes SPF checks to fail for all senders.`]
       : [];
 
+    // DKIM key strength — flag weak/deprecated RSA keys and revoked keys.
+    for (const [label, records] of Object.entries(emailSecurity)) {
+      if (!label.includes('_domainkey')) continue;
+      for (const r of records) {
+        if (r.keyStatus === 'warn') {
+          emailWarnings.push(`${label} uses a ${r.keyBits}-bit RSA key — RFC 8301 recommends 2048-bit minimum. Consider rotating.`);
+        } else if (r.keyStatus === 'fail') {
+          emailWarnings.push(r.keyBits
+            ? `${label} uses a ${r.keyBits}-bit RSA key — below the deprecated 1024-bit floor. Rotate immediately.`
+            : `${label} key appears to be revoked (empty p= tag).`);
+        }
+      }
+    }
+
     const wwwRecords = {};
     if (usual.A)    wwwRecords.A    = usual.A;
     if (usual.AAAA) wwwRecords.AAAA = usual.AAAA;
-    if (usual.TXT)  wwwRecords.TXT  = usual.TXT;
+    if (usual.TXT) {
+      // Exclude SPF records — already shown under Email Security, using the
+      // same v=spf1 match performLookup uses to classify them there.
+      const nonSpfTxt = usual.TXT.filter(r =>
+        !(r.data && r.data.toLowerCase().includes('v=spf1'))
+      );
+      if (nonSpfTxt.length) wwwRecords.TXT = nonSpfTxt;
+    }
     if (usual.CAA)  wwwRecords.CAA  = usual.CAA;
+
+    // NS network diversity — group by ASN (attached during lookup) to flag
+    // a single-network "3+1" failure and to color-code shared-network chips.
+    const nsRecords = usual.NS || [];
+    const distinctAsns = [...new Set(nsRecords.map(r => r.asn).filter(Boolean))];
+    const nsRecordsWithColor = nsRecords.map(r => ({
+      ...r,
+      asnColor: r.asn ? ASN_PALETTE[distinctAsns.indexOf(r.asn) % ASN_PALETTE.length] : null
+    }));
+    const nsWarnings = (nsRecords.length >= 2 && distinctAsns.length === 1)
+      ? [`All ${nsRecords.length} nameservers are on the same network (ASN ${distinctAsns[0]}) — a single provider-side incident (BGP issue, bad rollout, DDoS) could take every nameserver down at once. No independent '+1'.`]
+      : [];
+    const nsDiversityBadge = distinctAsns.length >= 2
+      ? { status: 'pass', message: `${distinctAsns.length} networks` }
+      : (nsRecords.length >= 2 && distinctAsns.length === 1)
+        ? { status: 'warn', message: 'single network' }
+        : null;
+
+    // Cross-resolver SOA serial check — a weaker proxy for per-NS serial
+    // agreement, since public DoH can't be pinned to a specific authoritative NS.
+    const soaRecords = usual.SOA || [];
+    const soaWarnings = [];
+    if (results.soaCrossCheck && soaRecords.length) {
+      const primarySoa = parseSOA(soaRecords[0].data);
+      if (primarySoa && primarySoa.serial !== results.soaCrossCheck.serial) {
+        soaWarnings.push(
+          `${results.soaCrossCheck.provider}'s resolver reports a different SOA serial (${results.soaCrossCheck.serial}) than ${results.provider}'s (${primarySoa.serial}) — likely propagation lag or a stale secondary. (Public resolvers only — not a substitute for querying each authoritative nameserver directly.)`
+        );
+      }
+    }
 
     return [
       {
         id: 'sec-ns', title: 'NS — Nameservers',
-        records: usual.NS ? { NS: usual.NS } : {},
+        records: nsRecords.length ? { NS: nsRecordsWithColor } : {},
         analysis: analysis?.ns,
+        extraBadges: nsDiversityBadge ? [nsDiversityBadge] : [],
         color: 'var(--ns-color)',
-        gridCols: 2
+        gridCols: 2,
+        warnings: nsWarnings
       },
       {
         id: 'sec-soa', title: 'SOA — Start of Authority',
         records: usual.SOA ? { SOA: usual.SOA } : {},
         analysis: analysis?.soa,
-        color: 'var(--soa-color)'
+        color: 'var(--soa-color)',
+        warnings: soaWarnings
       },
       {
         id: 'sec-mx', title: 'MX — Mail Exchange',
@@ -112,6 +169,7 @@
         title={section.title}
         records={section.records}
         analysis={section.analysis}
+        extraBadges={section.extraBadges ?? []}
         warnings={section.warnings ?? []}
         color={section.color}
         gridCols={section.gridCols ?? 1}

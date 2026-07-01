@@ -1,3 +1,5 @@
+import { parseDKIM } from './parsers.js';
+
 export const PROVIDERS = {
   google: 'https://dns.google/resolve',
   cloudflare: 'https://cloudflare-dns.com/dns-query'
@@ -49,6 +51,140 @@ export function parseSOA(soaData) {
     expire:  parts[5],
     minimum: parts[6]
   };
+}
+
+/** Build the Team Cymru DNS-based ASN whois query name for an IP (v4 or v6). */
+export function cymruQueryName(ip) {
+  if (ip.includes(':')) {
+    // IPv6: reverse the full exploded nibble list, e.g. 2001:db8::1 -> ...origin6.asn.cymru.com
+    const parts = ip.split('::');
+    const head = parts[0] ? parts[0].split(':') : [];
+    const tail = parts.length > 1 && parts[1] ? parts[1].split(':') : [];
+    const missing = 8 - head.length - tail.length;
+    const groups = [...head, ...Array(Math.max(missing, 0)).fill('0'), ...tail];
+    const exploded = groups.map(g => g.padStart(4, '0')).join('');
+    const nibbles = exploded.split('').reverse().join('.');
+    return `${nibbles}.origin6.asn.cymru.com`;
+  }
+  const octets = ip.split('.').reverse().join('.');
+  return `${octets}.origin.asn.cymru.com`;
+}
+
+/** Parse a Team Cymru origin TXT answer: "ASN | prefix | CC | registry | date" */
+export function parseCymruTxt(txt) {
+  if (!txt) return null;
+  const cleaned = txt.replace(/^"|"$/g, '');
+  const parts = cleaned.split('|').map(p => p.trim());
+  if (parts.length < 2 || !/^\d+/.test(parts[0])) return null;
+  return { asn: parts[0].split(' ')[0], prefix: parts[1] };
+}
+
+/**
+ * Resolve each NS hostname to its IP(s) and look up ASN via Team Cymru's
+ * DNS-based whois (plain TXT queries through the same DoH provider).
+ * Best-effort: any failed lookup is silently omitted, never thrown.
+ * Returns { [hostname]: { ips: string[], asn: string|null, prefix: string|null } }
+ */
+export async function resolveNSNetwork(nsHosts, providerUrl) {
+  const uniqueHosts = [...new Set(nsHosts)];
+
+  const hostIPs = await Promise.all(uniqueHosts.map(async host => {
+    const [aResult, aaaaResult] = await Promise.allSettled([
+      queryDNS(host, 'A', providerUrl),
+      queryDNS(host, 'AAAA', providerUrl)
+    ]);
+    const ips = [];
+    if (aResult.status === 'fulfilled') {
+      ips.push(...filterAnswers(aResult.value.Answer ?? [], 'A').map(r => r.data));
+    }
+    if (aaaaResult.status === 'fulfilled') {
+      ips.push(...filterAnswers(aaaaResult.value.Answer ?? [], 'AAAA').map(r => r.data));
+    }
+    return { host, ips };
+  }));
+
+  const uniqueIPs = [...new Set(hostIPs.flatMap(h => h.ips))];
+  const asnByIP = {};
+  await Promise.all(uniqueIPs.map(async ip => {
+    try {
+      const result = await queryDNS(cymruQueryName(ip), 'TXT', providerUrl);
+      const answer = (result.Answer ?? [])[0];
+      const parsed = answer ? parseCymruTxt(answer.data) : null;
+      if (parsed) asnByIP[ip] = parsed;
+    } catch (err) {
+      console.error(`Error looking up ASN for ${ip}:`, err);
+    }
+  }));
+
+  const network = {};
+  for (const { host, ips } of hostIPs) {
+    const withASN = ips.find(ip => asnByIP[ip]);
+    network[host] = {
+      ips,
+      asn: withASN ? asnByIP[withASN].asn : null,
+      prefix: withASN ? asnByIP[withASN].prefix : null
+    };
+  }
+  return network;
+}
+
+/**
+ * Classify a DKIM TXT record's public key: type (RSA/Ed25519), and for RSA
+ * the exact modulus bit length (via Web Crypto SPKI import of the p= tag) —
+ * flags keys below RFC 8301's 2048-bit recommendation. Best-effort: returns
+ * null if the key can't be parsed (malformed, unsupported k= type, etc).
+ */
+export async function classifyDkimKey(txt) {
+  const pairs = parseDKIM(txt);
+  const kTag = pairs.find(p => p.k === 'k')?.v?.toLowerCase() || 'rsa';
+  const pTag = pairs.find(p => p.k === 'p')?.v || '';
+
+  if (!pTag) {
+    return { keyType: kTag, keyBits: null, keyStatus: 'fail', keyLabel: 'Revoked (empty p=)' };
+  }
+
+  let bytes;
+  try {
+    bytes = Uint8Array.from(atob(pTag), c => c.charCodeAt(0));
+  } catch (err) {
+    console.error('Error decoding DKIM key:', err);
+    return null;
+  }
+
+  if (kTag === 'ed25519') {
+    return { keyType: 'ed25519', keyBits: 256, keyStatus: 'pass', keyLabel: 'Ed25519' };
+  }
+
+  try {
+    const cryptoKey = await crypto.subtle.importKey(
+      'spki', bytes.buffer, { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' }, true, ['verify']
+    );
+    const bits = cryptoKey.algorithm.modulusLength;
+    const status = bits < 1024 ? 'fail' : bits < 2048 ? 'warn' : 'pass';
+    return { keyType: 'rsa', keyBits: bits, keyStatus: status, keyLabel: `RSA ${bits}-bit` };
+  } catch (err) {
+    console.error('Error classifying DKIM key:', err);
+    return null;
+  }
+}
+
+/**
+ * Query SOA for domain against the DoH provider other than primaryProvider,
+ * as a weak cross-resolver proxy for per-authoritative-NS serial agreement.
+ */
+export async function checkSoaCrossResolver(domain, primaryProvider) {
+  const otherProvider = primaryProvider === 'google' ? 'cloudflare' : 'google';
+  try {
+    const result = await queryDNS(domain, 'SOA', PROVIDERS[otherProvider]);
+    const answers = filterAnswers(result.Answer ?? [], 'SOA');
+    if (!answers.length) return null;
+    const soa = parseSOA(answers[0].data);
+    if (!soa) return null;
+    return { provider: otherProvider === 'google' ? 'dns.google' : '1.1.1.1', serial: soa.serial };
+  } catch (err) {
+    console.error('Error cross-checking SOA:', err);
+    return null;
+  }
 }
 
 export async function queryDNS(recordDomain, recordType, providerUrl) {
@@ -130,7 +266,9 @@ export async function performLookup(domain, provider, dkimSelectors) {
         const result = await queryDNS(queryDomain, 'TXT', providerUrl);
         const answers = filterAnswers(result.Answer ?? [], 'TXT');
         if (answers.length > 0) {
-          emailSecurityResults[label] = answers;
+          emailSecurityResults[label] = await Promise.all(
+            answers.map(async record => ({ ...record, ...(await classifyDkimKey(record.data)) }))
+          );
         }
       } catch (err) {
         console.error(`Error querying ${label}:`, err);
@@ -138,10 +276,20 @@ export async function performLookup(domain, provider, dkimSelectors) {
     }
   }
 
+  const [nsNetwork, soaCrossCheck] = await Promise.all([
+    usualResults.NS ? resolveNSNetwork(usualResults.NS.map(r => r.data), providerUrl) : Promise.resolve(null),
+    usualResults.SOA ? checkSoaCrossResolver(cleanDomain, provider) : Promise.resolve(null)
+  ]);
+
+  if (nsNetwork && usualResults.NS) {
+    usualResults.NS = usualResults.NS.map(record => ({ ...record, ...nsNetwork[record.data] }));
+  }
+
   return {
     domain: cleanDomain,
     provider: provider === 'google' ? 'dns.google' : '1.1.1.1',
     usual: usualResults,
-    emailSecurity: emailSecurityResults
+    emailSecurity: emailSecurityResults,
+    soaCrossCheck
   };
 }
