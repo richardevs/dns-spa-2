@@ -16,6 +16,46 @@ export const RECORD_TYPES = {
   ]
 };
 
+/**
+ * localStorage-backed cache with a TTL, for data that's stable across
+ * sessions (e.g. Team Cymru's IP->ASN / ASN->org lookups). Falls back to
+ * in-memory-only if localStorage is unavailable (private browsing, quota,
+ * non-browser environment) — best-effort, never throws.
+ */
+function createPersistentCache(name, ttlMs) {
+  const storageKey = `dns-spa:${name}`;
+  const map = new Map(); // key -> { value, ts }
+
+  try {
+    const raw = localStorage.getItem(storageKey);
+    if (raw) {
+      const now = Date.now();
+      for (const [key, entry] of Object.entries(JSON.parse(raw))) {
+        if (entry && now - entry.ts < ttlMs) map.set(key, entry);
+      }
+    }
+  } catch (err) {
+    // localStorage unavailable — proceed in-memory only for this session.
+  }
+
+  function persist() {
+    try {
+      localStorage.setItem(storageKey, JSON.stringify(Object.fromEntries(map)));
+    } catch (err) {
+      // best-effort — ignore quota/availability errors
+    }
+  }
+
+  return {
+    has: key => map.has(key),
+    get: key => map.get(key)?.value,
+    set: (key, value) => {
+      map.set(key, { value, ts: Date.now() });
+      persist();
+    }
+  };
+}
+
 export function parseCAA(hexData) {
   const match = hexData.match(/\\#\s+\d+\s+([\da-fA-F\s]+)/);
   if (!match) return hexData;
@@ -89,11 +129,23 @@ export function parseCymruTxt(txt) {
  * (e.g. "TENCENT-NET-AP - Shenzhen Tencent Computer Systems..., CN") — we
  * split that into a short handle for compact display and the full string
  * for a hover tooltip.
+ *
+ * Registry data (IP->ASN, ASN->name) doesn't depend on which DoH provider
+ * relayed it, so results are cached in-memory for the life of the page —
+ * re-analyzing domains that share infrastructure (common for same-provider
+ * NS setups) reuses prior lookups instead of re-querying Cymru.
  */
+const ASN_NAME_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days — org names rarely change
+const asnNameCache = createPersistentCache('asnName', ASN_NAME_TTL_MS); // asn -> { short, full }
+
 export async function resolveAsnNames(asns, providerUrl) {
   const uniqueAsns = [...new Set(asns)];
   const names = {};
   await Promise.all(uniqueAsns.map(async asn => {
+    if (asnNameCache.has(asn)) {
+      names[asn] = asnNameCache.get(asn);
+      return;
+    }
     try {
       const result = await queryDNS(`AS${asn}.asn.cymru.com`, 'TXT', providerUrl);
       const answer = (result.Answer ?? [])[0];
@@ -102,7 +154,9 @@ export async function resolveAsnNames(asns, providerUrl) {
       const full = parts.length >= 5 ? parts[4] : '';
       if (!full) return;
       const dashIdx = full.indexOf(' - ');
-      names[asn] = { short: dashIdx === -1 ? full : full.slice(0, dashIdx), full };
+      const entry = { short: dashIdx === -1 ? full : full.slice(0, dashIdx), full };
+      names[asn] = entry;
+      asnNameCache.set(asn, entry);
     } catch (err) {
       console.error(`Error looking up name for AS${asn}:`, err);
     }
@@ -128,6 +182,9 @@ export async function resolveAsnNames(asns, providerUrl) {
  *   asnGroups: { asn: string|null, name: string|null, nameShort: string|null, ips: string[] }[]  // IPs grouped by network, for display
  * } }
  */
+const ASN_ORIGIN_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days — IP->ASN can shift with reallocations
+const asnOriginCache = createPersistentCache('asnOrigin', ASN_ORIGIN_TTL_MS); // ip -> { asn, prefix }
+
 export async function resolveNSNetwork(nsHosts, providerUrl) {
   const uniqueHosts = [...new Set(nsHosts)];
 
@@ -149,11 +206,18 @@ export async function resolveNSNetwork(nsHosts, providerUrl) {
   const uniqueIPs = [...new Set(hostIPs.flatMap(h => h.ips))];
   const asnByIP = {};
   await Promise.all(uniqueIPs.map(async ip => {
+    if (asnOriginCache.has(ip)) {
+      asnByIP[ip] = asnOriginCache.get(ip);
+      return;
+    }
     try {
       const result = await queryDNS(cymruQueryName(ip), 'TXT', providerUrl);
       const answer = (result.Answer ?? [])[0];
       const parsed = answer ? parseCymruTxt(answer.data) : null;
-      if (parsed) asnByIP[ip] = parsed;
+      if (parsed) {
+        asnByIP[ip] = parsed;
+        asnOriginCache.set(ip, parsed);
+      }
     } catch (err) {
       console.error(`Error looking up ASN for ${ip}:`, err);
     }
