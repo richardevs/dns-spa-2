@@ -22,6 +22,7 @@
 <section class="category-section" {id} style="--section-color: {color}">
   <button class="section-header" onclick={() => open = !open}>
     <div class="header-left">
+      <span class="section-glyph" style="color: {color}">┃</span>
       <span class="section-title">{title}</span>
       {#if analysis}
         <StatusBadge status={analysis.status} label={analysis.message} />
@@ -64,8 +65,8 @@
   .category-section {
     background: var(--bg-surface);
     border: 1px solid var(--border);
-    border-left: 3px solid var(--section-color);
-    border-radius: 8px;
+    border-left: 4px solid var(--section-color);
+    border-radius: 4px;
     overflow: hidden;
     margin-bottom: 0.875rem;
   }
@@ -93,6 +94,12 @@
     align-items: center;
     gap: 0.65rem;
     flex-wrap: wrap;
+  }
+
+  .section-glyph {
+    font-family: 'IBM Plex Mono', monospace;
+    font-weight: 700;
+    line-height: 1;
   }
 
   .section-title {
@@ -123,7 +130,8 @@
   .warning-banner {
     background: rgba(210, 153, 34, 0.08);
     border: 1px solid rgba(210, 153, 34, 0.3);
-    border-radius: 5px;
+    border-left: 3px solid var(--warn);
+    border-radius: 2px;
     color: var(--warn);
     padding: 0.5rem 0.75rem;
     font-size: 0.835rem;

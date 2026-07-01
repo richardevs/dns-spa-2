@@ -210,7 +210,7 @@
     gap: 0.55rem;
     padding: 0.45rem 0.65rem;
     background: var(--bg-raised);
-    border-radius: 5px;
+    border-radius: 3px;
     font-size: 0.875rem;
   }
 
@@ -413,7 +413,7 @@
     background: var(--bg-raised);
     border: 1px solid var(--border);
     border-top: none;
-    border-radius: 0 0 5px 5px;
+    border-radius: 0 0 3px 3px;
   }
 
   .soa-grid {

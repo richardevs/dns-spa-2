@@ -212,7 +212,7 @@
     top: 4.5rem;
     background: var(--bg-surface);
     border: 1px solid var(--border);
-    border-radius: 8px;
+    border-radius: 4px;
     padding: 0.75rem 0.6rem;
   }
 
@@ -239,7 +239,7 @@
     font-size: 0.82rem;
     font-weight: 500;
     cursor: pointer;
-    border-radius: 5px;
+    border-radius: 2px;
     transition: background 0.15s, color 0.15s;
     font-family: 'IBM Plex Mono', 'Courier New', monospace;
     position: relative;

@@ -86,12 +86,19 @@
 <div class="app-shell">
   <!-- ── Sticky header with inline search ── -->
   <header class="site-header">
-    <div class="header-inner">
+    <div class="header-row header-row-meta">
       <button class="site-title" onclick={() => {
           results = null; domain = ''; error = '';
           window.history.pushState({}, '', window.location.pathname);
-        }}>dns.holywhite.com</button>
+        }}><span class="prompt-glyph">┌─</span> dns.holywhite.com</button>
 
+      <a class="github-link" href="https://github.com/richardevs/dns-spa-2" target="_blank" rel="noopener">
+        GitHub
+      </a>
+    </div>
+
+    <div class="header-row header-row-prompt">
+      <span class="prompt-glyph">│ ❯</span>
       <div class="search-inline">
         <select bind:value={provider} disabled={loading} class="provider-select">
           <option value="google">dns.google</option>
@@ -116,10 +123,6 @@
           {loading ? '…' : 'Analyze'}
         </button>
       </div>
-
-      <a class="github-link" href="https://github.com/richardevs/dns-spa-2" target="_blank" rel="noopener">
-        GitHub
-      </a>
     </div>
 
     <!-- DKIM panel: always visible in initial state, toggle-controlled after search -->
@@ -192,13 +195,31 @@
     backdrop-filter: blur(8px);
   }
 
-  .header-inner {
+  .header-row {
     max-width: 1100px;
     margin: 0 auto;
-    padding: 0.6rem 1.25rem;
+    padding: 0.5rem 1.25rem;
     display: flex;
     align-items: center;
-    gap: 1rem;
+    gap: 0.7rem;
+  }
+
+  .header-row-meta {
+    justify-content: space-between;
+    padding-bottom: 0.4rem;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .header-row-prompt {
+    padding-top: 0.5rem;
+  }
+
+  .prompt-glyph {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 0.8rem;
+    color: var(--text-2);
+    flex-shrink: 0;
+    user-select: none;
   }
 
   .site-title {
@@ -216,6 +237,8 @@
     transition: opacity 0.15s;
   }
 
+  .site-title .prompt-glyph { color: var(--text-2); }
+
   .site-title:hover { opacity: 0.7; }
 
   /* ── Inline search ── */
@@ -226,7 +249,7 @@
     gap: 0;
     max-width: 560px;
     border: 1px solid var(--border);
-    border-radius: 7px;
+    border-radius: 3px;
     overflow: hidden;
     background: var(--bg-raised);
     transition: border-color 0.15s;
@@ -272,6 +295,7 @@
     outline: none;
     min-width: 0;
     font-family: 'IBM Plex Mono', monospace;
+    caret-color: var(--accent);
   }
 
   .input-wrap input::placeholder { color: var(--text-2); }
@@ -334,7 +358,7 @@
     padding: 0.38rem 0.65rem;
     background: var(--bg-raised);
     border: 1px solid var(--border);
-    border-radius: 5px;
+    border-radius: 3px;
     color: var(--text-1);
     font-size: 0.83rem;
     outline: none;
@@ -413,7 +437,7 @@
     border-left-width: 4px;
     color: var(--fail);
     padding: 0.75rem 1rem;
-    border-radius: 6px;
+    border-radius: 3px;
     margin-bottom: 1.5rem;
     font-size: 0.875rem;
   }
@@ -445,9 +469,10 @@
     background: var(--pass);
     color: #0d1117;
     padding: 0.5rem 1.1rem;
-    border-radius: 20px;
+    border-radius: 3px;
     font-weight: 700;
     font-size: 0.82rem;
+    font-family: 'IBM Plex Mono', monospace;
     box-shadow: 0 4px 14px rgba(63, 185, 80, 0.3);
     animation: slideUp 0.22s ease-out;
     z-index: 1000;
@@ -460,14 +485,8 @@
 
   /* ── Responsive ── */
   @media (max-width: 768px) {
-    .header-inner {
-      flex-wrap: wrap;
-      gap: 0.5rem;
-    }
-
-    .site-title { order: 1; }
-    .github-link { order: 2; margin-left: auto; }
-    .search-inline { order: 3; flex: 1 1 100%; max-width: none; }
+    .header-row-prompt { flex-wrap: wrap; }
+    .search-inline { flex: 1 1 100%; max-width: none; }
 
     .main-content {
       padding: 1.25rem 1rem;

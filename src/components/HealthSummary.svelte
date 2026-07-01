@@ -1,8 +1,6 @@
 <script>
   let { domain, analysis } = $props();
 
-  const statusIcon = { pass: '✓', warn: '⚠', fail: '✕', info: 'ℹ' };
-
   const cards = $derived([
     {
       label: 'Nameservers',
@@ -29,18 +27,18 @@
 
 <div class="health-summary">
   <div class="summary-title">
+    <span class="prompt-glyph">┌─</span>
     <span class="domain-text">{domain}</span>
-    <span class="summary-label">Health overview</span>
+    <span class="summary-label">health overview</span>
   </div>
-  <div class="cards">
-    {#each cards as card}
-      <div class="card {card.status}">
-        <div class="card-icon">{statusIcon[card.status]}</div>
-        <div class="card-body">
-          <div class="card-label">{card.label}</div>
-          <div class="card-value">{card.value}</div>
-        </div>
+  <div class="status-strip">
+    {#each cards as card, i}
+      <div class="strip-item">
+        <span class="block-indicator {card.status}"></span>
+        <span class="strip-label">{card.label}</span>
+        <span class="strip-value">{card.value}</span>
       </div>
+      {#if i < cards.length - 1}<span class="strip-sep">·</span>{/if}
     {/each}
   </div>
 </div>
@@ -49,16 +47,23 @@
   .health-summary {
     background: var(--bg-surface);
     border: 1px solid var(--border);
-    border-radius: 10px;
-    padding: 1.1rem 1.3rem;
+    border-radius: 4px;
+    padding: 0.9rem 1.2rem;
     margin-bottom: 1.5rem;
   }
 
   .summary-title {
     display: flex;
     align-items: baseline;
-    gap: 0.75rem;
-    margin-bottom: 0.9rem;
+    gap: 0.5rem;
+    margin-bottom: 0.75rem;
+  }
+
+  .prompt-glyph {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 0.8rem;
+    color: var(--text-2);
+    user-select: none;
   }
 
   .domain-text {
@@ -76,69 +81,46 @@
     letter-spacing: 0.8px;
   }
 
-  .cards {
-    display: grid;
-    grid-template-columns: repeat(4, 1fr);
-    gap: 0.7rem;
-  }
-
-  .card {
+  .status-strip {
     display: flex;
-    align-items: flex-start;
+    flex-wrap: wrap;
+    align-items: center;
     gap: 0.6rem;
-    background: var(--bg-raised);
-    border: 1px solid var(--border);
-    border-radius: 7px;
-    padding: 0.7rem 0.85rem;
-    border-left-width: 3px;
+    font-family: 'IBM Plex Mono', monospace;
   }
 
-  .card.pass { border-left-color: var(--pass); }
-  .card.warn { border-left-color: var(--warn); }
-  .card.fail { border-left-color: var(--fail); }
-  .card.info { border-left-color: var(--info); }
+  .strip-item {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+  }
 
-  .card-icon {
-    font-size: 0.9rem;
-    margin-top: 1px;
+  .block-indicator {
+    width: 0.6rem;
+    height: 0.6rem;
     flex-shrink: 0;
   }
 
-  .card.pass .card-icon { color: var(--pass); }
-  .card.warn .card-icon { color: var(--warn); }
-  .card.fail .card-icon { color: var(--fail); }
-  .card.info .card-icon { color: var(--info); }
+  .block-indicator.pass { background: var(--pass); }
+  .block-indicator.warn { background: var(--warn); }
+  .block-indicator.fail { background: var(--fail); }
+  .block-indicator.info { background: var(--info); }
 
-  .card-body {
-    min-width: 0;
-  }
-
-  .card-label {
-    font-size: 0.7rem;
+  .strip-label {
+    font-size: 0.72rem;
     font-weight: 700;
     text-transform: uppercase;
-    letter-spacing: 0.6px;
+    letter-spacing: 0.5px;
     color: var(--text-2);
-    margin-bottom: 0.2rem;
   }
 
-  .card-value {
-    font-size: 0.85rem;
-    font-weight: 600;
+  .strip-value {
+    font-size: 0.82rem;
     color: var(--text-1);
-    font-family: 'IBM Plex Mono', monospace;
-    word-break: break-word;
   }
 
-  @media (max-width: 700px) {
-    .cards {
-      grid-template-columns: repeat(2, 1fr);
-    }
-  }
-
-  @media (max-width: 400px) {
-    .cards {
-      grid-template-columns: 1fr;
-    }
+  .strip-sep {
+    color: var(--border-bright);
+    font-size: 0.9rem;
   }
 </style>
