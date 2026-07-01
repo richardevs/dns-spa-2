@@ -74,18 +74,38 @@
       <div class="ns-block">
         <span class="ns-row">
           <span class="mono domain-val ns-host">{record.data}</span>
-          {#if record.asn}
+          {#if record.asns?.length === 1}
             <span
               class="asn-chip"
               style="color:{record.asnColor ?? 'var(--text-2)'}"
-              title={record.prefix ?? ''}
-            >AS{record.asn}</span>
+              title={record.asnGroups?.[0]?.name ?? ''}
+            >AS{record.asns[0]}</span>
+          {:else if record.asns?.length > 1}
+            <span
+              class="asn-chip multi"
+              title={record.asnGroups.filter(g => g.asn).map(g => `AS${g.asn}${g.name ? ' (' + g.name + ')' : ''}`).join(', ')}
+            >{record.asns.length} networks</span>
           {/if}
         </span>
-        {#if record.ips?.length}
+        {#if (record.asnGroups?.length ?? 0) > 1}
+          <div class="ns-asn-groups">
+            {#each record.asnGroups as group}
+              <div class="asn-group">
+                <span class="asn-group-label mono" style="color:{group.color ?? 'var(--text-2)'}" title={group.name ?? ''}>
+                  {group.asn ? `AS${group.asn}` : 'unresolved'}{group.nameShort ? ` · ${group.nameShort}` : ''}
+                </span>
+                <div class="ns-ips">
+                  {#each group.ips as ip}
+                    <span class="ns-ip-chip mono">{ip}</span>
+                  {/each}
+                </div>
+              </div>
+            {/each}
+          </div>
+        {:else if record.ips?.length}
           <div class="ns-ips">
             {#each record.ips as ip}
-              <span class="ns-ip-chip mono">{ip}</span>
+              <span class="ns-ip-chip mono" title={record.asnGroups?.[0]?.name ?? ''}>{ip}</span>
             {/each}
           </div>
         {/if}
@@ -286,6 +306,26 @@
     background: color-mix(in srgb, currentColor 12%, transparent);
     flex-shrink: 0;
     font-family: 'IBM Plex Mono', monospace;
+  }
+
+  .asn-chip.multi { color: var(--pass); }
+
+  .ns-asn-groups {
+    display: flex;
+    flex-direction: column;
+    gap: 0.3rem;
+  }
+
+  .asn-group {
+    display: flex;
+    flex-direction: column;
+    gap: 0.22rem;
+  }
+
+  .asn-group-label {
+    font-size: 0.68rem;
+    font-weight: 600;
+    opacity: 0.85;
   }
 
   .ns-ips {

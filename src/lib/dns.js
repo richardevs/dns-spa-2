@@ -80,10 +80,53 @@ export function parseCymruTxt(txt) {
 }
 
 /**
- * Resolve each NS hostname to its IP(s) and look up ASN via Team Cymru's
- * DNS-based whois (plain TXT queries through the same DoH provider).
+ * Look up the registered org/AS-name for each ASN via Team Cymru's
+ * second-stage DNS whois (AS{asn}.asn.cymru.com, format:
+ * "ASN | CC | registry | date | AS Name"). Best-effort, per-ASN failures
+ * are silently omitted.
+ *
+ * The AS Name field is conventionally "HANDLE - free-text description, CC"
+ * (e.g. "TENCENT-NET-AP - Shenzhen Tencent Computer Systems..., CN") — we
+ * split that into a short handle for compact display and the full string
+ * for a hover tooltip.
+ */
+export async function resolveAsnNames(asns, providerUrl) {
+  const uniqueAsns = [...new Set(asns)];
+  const names = {};
+  await Promise.all(uniqueAsns.map(async asn => {
+    try {
+      const result = await queryDNS(`AS${asn}.asn.cymru.com`, 'TXT', providerUrl);
+      const answer = (result.Answer ?? [])[0];
+      if (!answer) return;
+      const parts = answer.data.replace(/^"|"$/g, '').split('|').map(p => p.trim());
+      const full = parts.length >= 5 ? parts[4] : '';
+      if (!full) return;
+      const dashIdx = full.indexOf(' - ');
+      names[asn] = { short: dashIdx === -1 ? full : full.slice(0, dashIdx), full };
+    } catch (err) {
+      console.error(`Error looking up name for AS${asn}:`, err);
+    }
+  }));
+  return names;
+}
+
+/**
+ * Resolve each NS hostname to its IP(s) and look up ASN + org name via Team
+ * Cymru's DNS-based whois (plain TXT queries through the same DoH provider).
  * Best-effort: any failed lookup is silently omitted, never thrown.
- * Returns { [hostname]: { ips: string[], asn: string|null, prefix: string|null } }
+ *
+ * A single NS hostname can resolve to many IPs on *different* networks
+ * (e.g. providers like DNSPod return 8-10+ IPs per NS, one per major ISP
+ * backbone) — so we track the full set of distinct ASNs per host rather
+ * than picking one representative IP, which would misrepresent both the
+ * per-host display and the overall network-diversity count.
+ *
+ * Returns { [hostname]: {
+ *   ips: string[],
+ *   asns: string[],                                   // distinct ASNs across all of this host's IPs
+ *   ipDetails: { ip, asn: string|null, prefix: string|null }[],
+ *   asnGroups: { asn: string|null, name: string|null, nameShort: string|null, ips: string[] }[]  // IPs grouped by network, for display
+ * } }
  */
 export async function resolveNSNetwork(nsHosts, providerUrl) {
   const uniqueHosts = [...new Set(nsHosts)];
@@ -116,13 +159,27 @@ export async function resolveNSNetwork(nsHosts, providerUrl) {
     }
   }));
 
+  const allAsns = [...new Set(Object.values(asnByIP).map(v => v.asn))];
+  const asnNames = await resolveAsnNames(allAsns, providerUrl);
+
   const network = {};
   for (const { host, ips } of hostIPs) {
-    const withASN = ips.find(ip => asnByIP[ip]);
+    const ipDetails = ips.map(ip => ({
+      ip,
+      asn: asnByIP[ip]?.asn ?? null,
+      prefix: asnByIP[ip]?.prefix ?? null
+    }));
+    const asnKeys = [...new Set(ipDetails.map(d => d.asn))];
     network[host] = {
       ips,
-      asn: withASN ? asnByIP[withASN].asn : null,
-      prefix: withASN ? asnByIP[withASN].prefix : null
+      asns: asnKeys.filter(Boolean),
+      ipDetails,
+      asnGroups: asnKeys.map(asn => ({
+        asn,
+        name: asn ? (asnNames[asn]?.full ?? null) : null,
+        nameShort: asn ? (asnNames[asn]?.short ?? null) : null,
+        ips: ipDetails.filter(d => d.asn === asn).map(d => d.ip)
+      }))
     };
   }
   return network;

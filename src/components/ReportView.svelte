@@ -50,11 +50,20 @@
 
     // NS network diversity — group by ASN (attached during lookup) to flag
     // a single-network "3+1" failure and to color-code shared-network chips.
+    // Diversity is computed across every resolved IP of every NS, not one
+    // ASN per hostname — some providers (e.g. DNSPod) return many IPs per
+    // NS name, each on a different network, so a per-host pick would badly
+    // undercount real diversity.
     const nsRecords = usual.NS || [];
-    const distinctAsns = [...new Set(nsRecords.map(r => r.asn).filter(Boolean))];
+    const distinctAsns = [...new Set(nsRecords.flatMap(r => r.asns || []))];
+    const asnColorFor = asn => ASN_PALETTE[distinctAsns.indexOf(asn) % ASN_PALETTE.length];
     const nsRecordsWithColor = nsRecords.map(r => ({
       ...r,
-      asnColor: r.asn ? ASN_PALETTE[distinctAsns.indexOf(r.asn) % ASN_PALETTE.length] : null
+      asnColor: r.asns?.length === 1 ? asnColorFor(r.asns[0]) : null,
+      asnGroups: (r.asnGroups || []).map(g => ({
+        ...g,
+        color: g.asn ? asnColorFor(g.asn) : null
+      }))
     }));
     const nsWarnings = (nsRecords.length >= 2 && distinctAsns.length === 1)
       ? [`All ${nsRecords.length} nameservers are on the same network (ASN ${distinctAsns[0]}) — a single provider-side incident (BGP issue, bad rollout, DDoS) could take every nameserver down at once. No independent '+1'.`]
