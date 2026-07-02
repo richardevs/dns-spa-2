@@ -10,13 +10,19 @@ export function analyzeResults(results) {
   const { usual, emailSecurity } = results;
   const analysis = {};
 
-  // NS: 2+ = pass, 1 = warn, 0 = fail
+  // A subdomain lives inside a parent zone, so NS and SOA belong to that zone
+  // rather than the queried name — report them as N/A instead of a red failure.
+  const naSuffix = results.parentZone ? ` of ${results.parentZone}` : '';
+
+  // NS: 2+ = pass, 1 = warn, 0 = fail (N/A for a subdomain)
   const nsRecords = usual.NS || [];
   const nsCount = nsRecords.length;
   if (nsCount >= 2) {
     analysis.ns = { status: 'pass', message: `${nsCount} nameservers` };
   } else if (nsCount === 1) {
     analysis.ns = { status: 'warn', message: '1 nameserver (2+ recommended)' };
+  } else if (results.isSubdomain) {
+    analysis.ns = { status: 'info', message: `N/A — subdomain${naSuffix}` };
   } else {
     analysis.ns = { status: 'fail', message: 'No NS records' };
   }
@@ -36,6 +42,8 @@ export function analyzeResults(results) {
     } else {
       analysis.soa = { status: 'info', message: 'SOA record present' };
     }
+  } else if (results.isSubdomain) {
+    analysis.soa = { status: 'info', message: `N/A — subdomain${naSuffix}` };
   } else {
     analysis.soa = { status: 'fail', message: 'No SOA record' };
   }

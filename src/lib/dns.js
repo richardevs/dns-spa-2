@@ -9,10 +9,14 @@ export const RECORD_TYPES = {
   usual: ['SOA', 'A', 'AAAA', 'TXT', 'MX', 'NS', 'CAA'],
   emailSecurity: [
     { type: 'TXT', name: '_dmarc', label: '_dmarc (TXT)' },
-    { type: 'A', name: 'mta-sts', label: 'mta-sts (A)' },
-    { type: 'AAAA', name: 'mta-sts', label: 'mta-sts (AAAA)' },
-    { type: 'TXT', name: '_mta-sts', label: '_mta-sts (TXT)' },
-    { type: 'TXT', name: '_smtp._tls', label: '_smtp._tls (TXT)' }
+    // MTA-STS and TLS-RPT (_smtp._tls) are defined only at the organizational
+    // domain — they're never valid on an arbitrary subdomain, so these are
+    // skipped when a subdomain is looked up (see performLookup). DMARC, by
+    // contrast, can carry a per-subdomain policy, so it's always queried.
+    { type: 'A', name: 'mta-sts', label: 'mta-sts (A)', orgScoped: true },
+    { type: 'AAAA', name: 'mta-sts', label: 'mta-sts (AAAA)', orgScoped: true },
+    { type: 'TXT', name: '_mta-sts', label: '_mta-sts (TXT)', orgScoped: true },
+    { type: 'TXT', name: '_smtp._tls', label: '_smtp._tls (TXT)', orgScoped: true }
   ]
 };
 
@@ -340,22 +344,101 @@ export async function performLookup(domain, provider, dkimSelectors) {
   const usualResults = {};
   const emailSecurityResults = {};
 
-  for (const type of RECORD_TYPES.usual) {
+  // Query one "usual" record and store its answers under usualResults[type].
+  const fetchUsual = async type => {
     try {
       const result = await queryDNS(cleanDomain, type, providerUrl);
       const answers = filterAnswers(result.Answer ?? [], type);
       if (answers.length > 0) {
-        if (type === 'CAA' && provider === 'cloudflare') {
-          usualResults[type] = answers.map(record => ({ ...record, data: parseCAA(record.data) }));
-        } else {
-          usualResults[type] = answers;
-        }
+        usualResults[type] = (type === 'CAA' && provider === 'cloudflare')
+          ? answers.map(record => ({ ...record, data: parseCAA(record.data) }))
+          : answers;
       }
     } catch (err) {
       console.error(`Error querying ${type}:`, err);
     }
+  };
+
+  // Subdomain detection is DNS-native and PSL-free: an SOA query returns the
+  // record in the *Answer* section only at a zone apex; for a name inside a
+  // zone (a normal subdomain) the Answer is empty and the enclosing zone's SOA
+  // comes back in *Authority* instead. Both DoH providers behave this way.
+  // SOA is queried FIRST and alone because its verdict decides which of the
+  // later requests to skip — that's the one unavoidable serialization point.
+  // On any SOA *error* we leave isSubdomain false (treat as apex) so a failed
+  // lookup never hides data.
+  let isSubdomain = false;
+  let parentZone  = null;
+  try {
+    const soaResult = await queryDNS(cleanDomain, 'SOA', providerUrl);
+    const soaAnswers = filterAnswers(soaResult.Answer ?? [], 'SOA');
+    if (soaAnswers.length > 0) {
+      usualResults.SOA = soaAnswers;
+    } else {
+      isSubdomain = true;
+      const authSoa = (soaResult.Authority ?? []).find(r => r.type === DNS_TYPE.SOA);
+      if (authSoa?.name) parentZone = authSoa.name.replace(/\.$/, '');
+    }
+  } catch (err) {
+    console.error('Error querying SOA:', err);
   }
 
+  // Everything below is independent of everything else (each is a distinct DNS
+  // name/type), so once the SOA verdict is in we fan the whole batch out at
+  // once instead of awaiting each in series.
+  const remainingUsual = RECORD_TYPES.usual.filter(type =>
+    // SOA already fetched above; a subdomain has no NS of its own.
+    type !== 'SOA' && !(type === 'NS' && isSubdomain)
+  );
+
+  // For a subdomain, skip the organizational-domain-only records (MTA-STS,
+  // TLS-RPT) — they can't exist there, so querying them is wasted.
+  const emailRecords = isSubdomain
+    ? RECORD_TYPES.emailSecurity.filter(record => !record.orgScoped)
+    : RECORD_TYPES.emailSecurity;
+
+  const selectors = dkimSelectors?.trim()
+    ? dkimSelectors.split(',').map(s => s.trim()).filter(s => s)
+    : [];
+
+  // Tasks return { label, records } (or null) so emailSecurityResults can be
+  // assembled in a stable display order regardless of which resolves first.
+  const emailTask = async ({ type, name, label }) => {
+    try {
+      const result = await queryDNS(`${name}.${cleanDomain}`, type, providerUrl);
+      const answers = filterAnswers(result.Answer ?? [], type);
+      return answers.length > 0 ? { label, records: answers } : null;
+    } catch (err) {
+      console.error(`Error querying ${label}:`, err);
+      return null;
+    }
+  };
+
+  const dkimTask = async selector => {
+    const label = `${selector}._domainkey (TXT)`;
+    try {
+      const result = await queryDNS(`${selector}._domainkey.${cleanDomain}`, 'TXT', providerUrl);
+      const answers = filterAnswers(result.Answer ?? [], 'TXT');
+      if (answers.length === 0) return null;
+      const records = await Promise.all(
+        answers.map(async record => ({ ...record, ...(await classifyDkimKey(record.data)) }))
+      );
+      return { label, records };
+    } catch (err) {
+      console.error(`Error querying ${label}:`, err);
+      return null;
+    }
+  };
+
+  const [, emailResolved, dkimResolved] = await Promise.all([
+    Promise.all(remainingUsual.map(fetchUsual)),
+    Promise.all(emailRecords.map(emailTask)),
+    Promise.all(selectors.map(dkimTask))
+  ]);
+
+  // SPF is derived from the TXT records already fetched above (no extra query)
+  // and listed first to head the Email Security section, then the queried
+  // records in their defined order, then DKIM in selector order.
   if (usualResults.TXT) {
     const spfRecords = usualResults.TXT.filter(record =>
       record.data && record.data.toLowerCase().includes('v=spf1')
@@ -364,37 +447,8 @@ export async function performLookup(domain, provider, dkimSelectors) {
       emailSecurityResults['SPF (TXT)'] = spfRecords;
     }
   }
-
-  for (const record of RECORD_TYPES.emailSecurity) {
-    const queryDomain = `${record.name}.${cleanDomain}`;
-    try {
-      const result = await queryDNS(queryDomain, record.type, providerUrl);
-      const answers = filterAnswers(result.Answer ?? [], record.type);
-      if (answers.length > 0) {
-        emailSecurityResults[record.label] = answers;
-      }
-    } catch (err) {
-      console.error(`Error querying ${record.label}:`, err);
-    }
-  }
-
-  if (dkimSelectors && dkimSelectors.trim()) {
-    const selectors = dkimSelectors.split(',').map(s => s.trim()).filter(s => s);
-    for (const selector of selectors) {
-      const queryDomain = `${selector}._domainkey.${cleanDomain}`;
-      const label = `${selector}._domainkey (TXT)`;
-      try {
-        const result = await queryDNS(queryDomain, 'TXT', providerUrl);
-        const answers = filterAnswers(result.Answer ?? [], 'TXT');
-        if (answers.length > 0) {
-          emailSecurityResults[label] = await Promise.all(
-            answers.map(async record => ({ ...record, ...(await classifyDkimKey(record.data)) }))
-          );
-        }
-      } catch (err) {
-        console.error(`Error querying ${label}:`, err);
-      }
-    }
+  for (const entry of [...emailResolved, ...dkimResolved]) {
+    if (entry) emailSecurityResults[entry.label] = entry.records;
   }
 
   const [nsNetwork, soaCrossCheck] = await Promise.all([
@@ -411,6 +465,8 @@ export async function performLookup(domain, provider, dkimSelectors) {
     provider: provider === 'google' ? 'dns.google' : '1.1.1.1',
     usual: usualResults,
     emailSecurity: emailSecurityResults,
-    soaCrossCheck
+    soaCrossCheck,
+    isSubdomain,
+    parentZone
   };
 }
