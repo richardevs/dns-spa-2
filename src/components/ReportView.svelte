@@ -85,12 +85,29 @@
     // agreement, since public DoH can't be pinned to a specific authoritative NS.
     const soaRecords = usual.SOA || [];
     const soaWarnings = [];
+    const soaNotes = [];
     if (results.soaCrossCheck && soaRecords.length) {
       const primarySoa = parseSOA(soaRecords[0].data);
-      if (primarySoa && primarySoa.serial !== results.soaCrossCheck.serial) {
-        soaWarnings.push(
-          `${results.soaCrossCheck.provider}'s resolver reports a different SOA serial (${results.soaCrossCheck.serial}) than ${results.provider}'s (${primarySoa.serial}) — likely propagation lag or a stale secondary. (Public resolvers only — not a substitute for querying each authoritative nameserver directly.)`
-        );
+      const cross = results.soaCrossCheck;
+      if (primarySoa && primarySoa.serial !== cross.serial) {
+        // A serial mismatch is only meaningful when both resolvers were
+        // answered by the same primary (same MNAME). If the MNAMEs differ, the
+        // two answers come from independent primaries — multi-provider or
+        // independent-secondary DNS — where each operator runs its own serial
+        // scheme, so the numbers aren't comparable and this isn't lag. (This is
+        // MNAME-based on purpose: grouping nameservers by ASN/domain to guess
+        // "how many providers" is unreliable — a single provider can span
+        // multiple ASNs, e.g. an anycast 3+1, and spread across several TLDs.)
+        const normMname = h => (h || '').replace(/\.$/, '').toLowerCase();
+        if (normMname(primarySoa.mname) === normMname(cross.mname)) {
+          soaWarnings.push(
+            `${cross.provider}'s resolver reports a different SOA serial (${cross.serial}) than ${results.provider}'s (${primarySoa.serial}) — likely propagation lag or a stale secondary. (Public resolvers only — not a substitute for querying each authoritative nameserver directly.)`
+          );
+        } else {
+          soaNotes.push(
+            `${cross.provider}'s resolver was answered by a different primary (${cross.mname}, serial ${cross.serial}) than ${results.provider}'s (${primarySoa.mname}, serial ${primarySoa.serial}) — typical of multi-provider or independent-secondary DNS, where each operator maintains its own SOA serial. The serials aren't directly comparable, so this isn't necessarily propagation lag.`
+          );
+        }
       }
     }
 
@@ -109,7 +126,8 @@
         records: usual.SOA ? { SOA: usual.SOA } : {},
         analysis: analysis?.soa,
         color: 'var(--soa-color)',
-        warnings: soaWarnings
+        warnings: soaWarnings,
+        notes: soaNotes
       },
       {
         id: 'sec-mx', title: 'MX — Mail Exchange',
@@ -187,6 +205,7 @@
         analysis={section.analysis}
         extraBadges={section.extraBadges ?? []}
         warnings={section.warnings ?? []}
+        notes={section.notes ?? []}
         color={section.color}
         gridCols={section.gridCols ?? 1}
         {onCopy}

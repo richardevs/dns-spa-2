@@ -296,6 +296,11 @@ export async function classifyDkimKey(txt) {
 /**
  * Query SOA for domain against the DoH provider other than primaryProvider,
  * as a weak cross-resolver proxy for per-authoritative-NS serial agreement.
+ * Returns the MNAME (primary master) too: a serial mismatch only means
+ * propagation lag when both resolvers were answered by the *same* primary.
+ * When the MNAMEs differ, the two answers come from independent primaries
+ * (multi-provider / independent-secondary DNS), so their serials aren't
+ * comparable — the caller uses this to distinguish real lag from that case.
  */
 export async function checkSoaCrossResolver(domain, primaryProvider) {
   const otherProvider = primaryProvider === 'google' ? 'cloudflare' : 'google';
@@ -305,7 +310,11 @@ export async function checkSoaCrossResolver(domain, primaryProvider) {
     if (!answers.length) return null;
     const soa = parseSOA(answers[0].data);
     if (!soa) return null;
-    return { provider: otherProvider === 'google' ? 'dns.google' : '1.1.1.1', serial: soa.serial };
+    return {
+      provider: otherProvider === 'google' ? 'dns.google' : '1.1.1.1',
+      serial: soa.serial,
+      mname: soa.mname
+    };
   } catch (err) {
     console.error('Error cross-checking SOA:', err);
     return null;

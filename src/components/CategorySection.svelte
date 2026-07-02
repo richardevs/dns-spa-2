@@ -9,6 +9,7 @@
     analysis    = null,
     extraBadges = [],
     warnings    = [],
+    notes       = [],
     color       = 'var(--accent)',
     gridCols    = 1,
     onCopy
@@ -41,6 +42,10 @@
     <div class="section-body">
       {#each warnings as warning}
         <div class="warning-banner">{warning}</div>
+      {/each}
+
+      {#each notes as note}
+        <div class="note-banner">{note}</div>
       {/each}
 
       {#if Object.keys(records).length > 0}
@@ -133,6 +138,19 @@
     border-left: 3px solid var(--warn);
     border-radius: 2px;
     color: var(--warn);
+    padding: 0.5rem 0.75rem;
+    font-size: 0.835rem;
+    line-height: 1.5;
+    margin-bottom: 0.7rem;
+  }
+
+  /* Informational (not a problem) — e.g. multi-provider SOA divergence. */
+  .note-banner {
+    background: color-mix(in srgb, var(--accent) 8%, transparent);
+    border: 1px solid color-mix(in srgb, var(--accent) 30%, transparent);
+    border-left: 3px solid var(--accent);
+    border-radius: 2px;
+    color: var(--text-1);
     padding: 0.5rem 0.75rem;
     font-size: 0.835rem;
     line-height: 1.5;
